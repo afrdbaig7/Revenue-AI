@@ -1,0 +1,50 @@
+# --- Secrets & local config ---
+.env
+.env.local
+*.pem
+*.key
+*.crt
+
+# --- Java / Maven ---
+apps/api/target/
+apps/worker/target/
+apps/*/target/
+*.class
+*.log
+.mvn/wrapper/maven-wrapper.jar
+
+# --- Node / Next.js ---
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.env.local
+npm-debug.log*
+.pnpm-store/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- IDE / OS ---
+.idea/
+*.iml
+.vscode/
+.DS_Store
+.spotless/
+.eclipse/
+
+# --- Data / runtime ---
+data/
+*.pid
+coverage/
+htmlcov/
+
+# --- Generated reports ---
+reports/
+tmp/
