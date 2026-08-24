@@ -1,0 +1,19 @@
+package com.recoverai.common.api;
+
+/** Stable machine-readable error codes exposed to clients. */
+public enum ErrorCode {
+  VALIDATION_ERROR,
+  UNAUTHENTICATED,
+  FORBIDDEN,
+  NOT_FOUND,
+  CONFLICT,
+  RATE_LIMITED,
+  POLICY_VIOLATION,
+  INCIDENT_STATE_INVALID,
+  PAYMENT_STATE_INVALID,
+  PROVIDER_ERROR,
+  PROVIDER_UNAVAILABLE,
+  IDEMPOTENCY_CONFLICT,
+  AI_UNAVAILABLE,
+  INTERNAL_ERROR
+}
