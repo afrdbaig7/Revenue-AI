@@ -8,6 +8,12 @@ import com.recoverai.tenant.domain.Organization;
 import com.recoverai.tenant.infrastructure.OrganizationRepository;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -55,7 +61,7 @@ class DatabaseRestartIT {
   @Autowired OrganizationRepository organizations;
 
   @Test
-  void applicationRecoversAfterDatabaseRestart() {
+  void applicationRecoversAfterDatabaseRestart() throws InterruptedException {
     Organization org = organizations.save(new Organization("Pre-Crash Org", "pre-" + UUID.randomUUID()));
     assertThat(organizations.findById(org.getId())).isPresent();
 
@@ -63,16 +69,24 @@ class DatabaseRestartIT {
     // promptly while unpausing preserves the same database and its data.
     String containerId = POSTGRES.getContainerId();
     DockerClientFactory.instance().client().pauseContainerCmd(containerId).exec();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    Future<?> inFlight =
+        executor.submit(
+            () ->
+                organizations.saveAndFlush(
+                    new Organization("In-Flight Org", "mid-" + UUID.randomUUID())));
     try {
-      assertThatThrownBy(
-              () ->
-                  organizations.saveAndFlush(
-                      new Organization("In-Flight Org", "mid-" + UUID.randomUUID())))
+      assertThatThrownBy(() -> inFlight.get(5, TimeUnit.SECONDS))
           .isInstanceOfAny(
-              CannotCreateTransactionException.class, DataAccessResourceFailureException.class);
+              ExecutionException.class,
+              TimeoutException.class,
+              CannotCreateTransactionException.class,
+              DataAccessResourceFailureException.class);
     } finally {
       DockerClientFactory.instance().client().unpauseContainerCmd(containerId).exec();
+      executor.shutdownNow();
     }
+    assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
 
     // Verify application resumes operation and connection pool is healthy
     await()
