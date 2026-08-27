@@ -17,6 +17,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -57,10 +58,10 @@ class DatabaseRestartIT {
     Organization org = organizations.save(new Organization("Pre-Crash Org", "pre-" + UUID.randomUUID()));
     assertThat(organizations.findById(org.getId())).isPresent();
 
-    // Kill, but do not remove, the existing container. This drops open JDBC sockets immediately
-    // while preserving the container's data for the restart assertion.
+    // Stop, but do not remove, the existing container. This drops open JDBC sockets while
+    // preserving the container's data for the restart assertion.
     String containerId = POSTGRES.getContainerId();
-    DockerClientFactory.instance().client().killContainerCmd(containerId).exec();
+    DockerClientFactory.instance().client().stopContainerCmd(containerId).withTimeout(5).exec();
     try {
       assertThatThrownBy(
               () ->
@@ -70,6 +71,9 @@ class DatabaseRestartIT {
               CannotCreateTransactionException.class, DataAccessResourceFailureException.class);
     } finally {
       DockerClientFactory.instance().client().startContainerCmd(containerId).exec();
+      Wait.forListeningPort()
+          .withStartupTimeout(Duration.ofSeconds(30))
+          .waitUntilReady(POSTGRES);
     }
 
     // Verify application resumes operation and connection pool is healthy

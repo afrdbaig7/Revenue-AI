@@ -9,6 +9,7 @@ import com.recoverai.recovery.domain.RecoveryAction;
 import com.recoverai.recovery.infrastructure.RecoveryActionRepository;
 import com.recoverai.support.PersistenceTestFixtures;
 import com.recoverai.tenant.infrastructure.OrganizationRepository;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -39,6 +40,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     "recoverai.event-dispatch-mode=inline",
     "recoverai.razorpay.mock-mode=true",
     "recoverai.ai.enabled=false",
+    "recoverai.scheduling.action-poll-ms=3600000",
     "spring.jpa.hibernate.ddl-auto=validate"
 })
 class ConcurrentActionExecutionIT {
@@ -109,7 +111,13 @@ class ConcurrentActionExecutionIT {
     UUID incidentId = fixture.incidentId();
     String idempotencyKey = RecoveryAction.idempotencyKeyFor(incidentId, "EMAIL_NUDGE", 1);
     
-    RecoveryAction action = new RecoveryAction(orgId, incidentId, "EMAIL_NUDGE", 1, Instant.now(), idempotencyKey);
+    RecoveryAction action = new RecoveryAction(
+        orgId,
+        incidentId,
+        "EMAIL_NUDGE",
+        1,
+        Instant.now().plus(Duration.ofHours(1)),
+        idempotencyKey);
     actions.saveAndFlush(action);
     
     // Simulate two threads reading the same entity version

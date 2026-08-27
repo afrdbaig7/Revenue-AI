@@ -145,7 +145,7 @@ class LateAuthorizationIT {
     assertThat(actions.findByIncidentIdOrderByCreatedAtAsc(incident.getId()))
         .extracting(RecoveryAction::getStatus)
         .doesNotContain(RecoveryAction.Status.SCHEDULED, RecoveryAction.Status.EXECUTING);
-    assertThat(after.getCancellationReason()).contains("Duplicate collection prevented");
+    assertThat(after.getCancellationReason()).contains("authorized before recovery execution");
 
     // 5. The whole story is audited (LATE_AUTHORIZATION_RECEIVED + RECOVERY_CANCELLED).
     var auditPage = auditEvents.findByOrgIdAndIncidentIdOrderByTimestampDesc(
