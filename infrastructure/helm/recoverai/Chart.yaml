@@ -1,0 +1,9 @@
+apiVersion: v2
+name: recoverai
+description: RecoverAI — AI Revenue Recovery & Payment Reliability Engine
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+# Managed services are recommended (RDS/Cloud SQL, ElastiCache/Upstash,
+# Redpanda Cloud/Confluent, Temporal Cloud) — see values.yaml endpoints.

@@ -1,0 +1,47 @@
+groups:
+  - name: recoverai
+    rules:
+      - alert: WebhookSignatureFailures
+        expr: increase(webhook_invalid_signature_total[5m]) > 10
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Razorpay webhook signature failures rising"
+          description: "{{ $value }} invalid signatures in 5 minutes — verify webhook secret rotation."
+
+      - alert: OutboxBacklog
+        expr: max by (application) (recoverai_outbox_pending) > 500
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Outbox backlog high"
+          description: "Events pending publication — publisher may be stuck."
+
+      - alert: KafkaConsumerLagHigh
+        expr: max by (group) (kafka_consumer_lag) > 5000
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Kafka consumer lag high (group {{ $labels.group }})"
+
+      - alert: AiFallbackRateHigh
+        expr: rate(ai_fallback_total[10m]) / clamp_min(rate(ai_request_total[10m]), 1) > 0.8
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "AI service answering from deterministic fallback"
+          description: "LLM provider likely down; deterministic mode is active by design."
+
+      - alert: ProviderErrorRate
+        expr: rate(razorpay_request_latency_count{exception=~".*"}[5m]) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Razorpay error rate elevated"
+
+      - alert: DuplicateCollectionPrevented
+        expr: increase(duplicate_collection_prevented_total[1h]) > 0
+        labels: { severity: info }
+        annotations:
+          summary: "Late authorization handled"
+          description: "A payment authorized after appearing failed — recovery cancelled, duplicate collection prevented."

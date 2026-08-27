@@ -1,0 +1,84 @@
+# RecoverAI Helm values — production template. Override secrets via a secrets
+# manager / sealed secrets; never commit real credentials.
+
+image:
+  repository: recoverai
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicas:
+  api: 2
+  worker: 2
+  ai: 2
+  web: 2
+
+imagePullSecrets: []
+
+# Managed-service endpoints (do NOT deploy Postgres/Kafka ourselves):
+postgres:
+  url: "jdbc:postgresql://postgres-recoverai:5432/recoverai"
+  username: "recoverai"
+  password: "CHANGE_ME"
+redis:
+  host: "redis-recoverai"
+  port: "6379"
+  password: ""
+kafka:
+  bootstrapServers: "redpanda-recoverai:9092"
+temporal:
+  enabled: true
+  target: "temporal-recoverai:7233"
+  namespace: "recoverai"
+
+razorpay:
+  keyId: "CHANGE_ME"
+  keySecret: "CHANGE_ME"
+  webhookSecret: "CHANGE_ME"
+  apiBase: "https://api.razorpay.com"
+  mockMode: "false"
+
+ai:
+  provider: "none"          # openai | gemini | groq | none
+  openaiApiKey: ""
+
+security:
+  encryptionKey: "CHANGE_ME_32_BYTE_MINIMUM_SECRET_KEY_0000"
+  jwtIssuer: "recoverai-prod"
+  jwtSecureCookies: "true"
+
+ingress:
+  enabled: true
+  host: "app.recoverai.example"
+  className: "nginx"
+  tlsSecretName: "recoverai-tls"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+resources:
+  api:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  worker:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi }
+  ai:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  web:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+autoscaling:
+  worker:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU: 70
+  ai:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPU: 70
+
+podDisruptionBudget:
+  minAvailable: 1

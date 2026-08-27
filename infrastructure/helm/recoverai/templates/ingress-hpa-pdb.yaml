@@ -1,0 +1,80 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "recoverai.fullname" . }}-ingress
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service: { name: {{ include "recoverai.fullname" . }}-api, port: { number: 80 } }
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: {{ include "recoverai.fullname" . }}-web, port: { number: 80 } }
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "recoverai.fullname" . }}-pdb
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-api }
+---
+{{- if .Values.autoscaling.worker.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "recoverai.fullname" . }}-worker-hpa
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "recoverai.fullname" . }}-worker
+  minReplicas: {{ .Values.autoscaling.worker.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.worker.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ .Values.autoscaling.worker.targetCPU }} }
+{{- end }}
+---
+{{- if .Values.autoscaling.ai.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "recoverai.fullname" . }}-ai-hpa
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "recoverai.fullname" . }}-ai
+  minReplicas: {{ .Values.autoscaling.ai.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.ai.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ .Values.autoscaling.ai.targetCPU }} }
+{{- end }}

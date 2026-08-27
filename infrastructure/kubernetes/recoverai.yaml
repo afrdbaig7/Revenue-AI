@@ -1,0 +1,266 @@
+# ============================================================================
+# RecoverAI — Kubernetes manifests (production extension).
+# Managed services are recommended for Postgres, Redis, Redpanda/Kafka, Temporal
+# (see docs/architecture/scaling.md) — they are NOT deployed here.
+# ============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: recoverai
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: recoverai-config
+  namespace: recoverai
+data:
+  DEMO_MODE: "false"
+  EVENT_DISPATCH_MODE: "kafka"
+  KAFKA_BOOTSTRAP_SERVERS: "redpanda-recoverai:9092"
+  TEMPORAL_TARGET: "temporal-recoverai:7233"
+  TEMPORAL_ENABLED: "true"
+  AI_SERVICE_BASE_URL: "http://recoverai-ai:8100"
+  RAZORPAY_API_BASE: "https://api.razorpay.com"
+  RAZORPAY_MOCK_MODE: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: recoverai-secrets
+  namespace: recoverai
+type: Opaque
+stringData:
+  DATABASE_URL: "jdbc:postgresql://postgres-recoverai:5432/recoverai"   # set real values in a real deployment
+  DATABASE_USERNAME: "recoverai"
+  DATABASE_PASSWORD: "CHANGE_ME"
+  REDIS_HOST: "redis-recoverai"
+  RAZORPAY_KEY_ID: "CHANGE_ME"
+  RAZORPAY_KEY_SECRET: "CHANGE_ME"
+  RAZORPAY_WEBHOOK_SECRET: "CHANGE_ME"
+  ENCRYPTION_KEY: "CHANGE_ME_32_BYTE_MINIMUM_SECRET_KEY_0000"
+  JWT_ISSUER: "recoverai-prod"
+  JWT_SECURE_COOKIES: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recoverai-api
+  namespace: recoverai
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels: { app: recoverai-api }
+  template:
+    metadata:
+      labels: { app: recoverai-api }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: recoverai/api:latest
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: recoverai-config }
+            - secretRef: { name: recoverai-secrets }
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recoverai-worker
+  namespace: recoverai
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: recoverai-worker }
+  template:
+    metadata:
+      labels: { app: recoverai-worker }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: worker
+          image: recoverai/worker:latest
+          envFrom:
+            - configMapRef: { name: recoverai-config }
+            - secretRef: { name: recoverai-secrets }
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 1Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recoverai-ai
+  namespace: recoverai
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: recoverai-ai }
+  template:
+    metadata:
+      labels: { app: recoverai-ai }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: ai
+          image: recoverai/ai-service:latest
+          ports: [{ containerPort: 8100 }]
+          env:
+            - { name: LLM_PROVIDER, value: "openai" }
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: recoverai-secrets, key: OPENAI_API_KEY }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8100 }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recoverai-web
+  namespace: recoverai
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: recoverai-web }
+  template:
+    metadata:
+      labels: { app: recoverai-web }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: web
+          image: recoverai/web:latest
+          ports: [{ containerPort: 3000 }]
+          env:
+            - { name: NEXT_PUBLIC_API_BASE, value: "https://app.recoverai.example/api/v1" }
+          readinessProbe:
+            httpGet: { path: /login, port: 3000 }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recoverai-api
+  namespace: recoverai
+spec:
+  selector: { app: recoverai-api }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recoverai-ai
+  namespace: recoverai
+spec:
+  selector: { app: recoverai-ai }
+  ports: [{ port: 80, targetPort: 8100 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recoverai-web
+  namespace: recoverai
+spec:
+  selector: { app: recoverai-web }
+  ports: [{ port: 80, targetPort: 3000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: recoverai-ingress
+  namespace: recoverai
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts: [app.recoverai.example]
+      secretName: recoverai-tls
+  rules:
+    - host: app.recoverai.example
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service: { name: recoverai-api, port: { number: 80 } }
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: recoverai-web, port: { number: 80 } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: recoverai-api-pdb
+  namespace: recoverai
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: recoverai-api }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: recoverai-worker-hpa
+  namespace: recoverai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: recoverai-worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: recoverai-ai-hpa
+  namespace: recoverai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: recoverai-ai
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

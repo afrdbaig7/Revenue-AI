@@ -1,0 +1,112 @@
+{{- define "recoverai.env" }}
+envFrom:
+  - configMapRef:
+      name: {{ include "recoverai.fullname" . }}-config
+  - secretRef:
+      name: {{ include "recoverai.fullname" . }}-secrets
+{{- end }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recoverai.fullname" . }}-api
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.api }}
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-api }
+  template:
+    metadata:
+      labels: { app: {{ include "recoverai.fullname" . }}-api }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}/api:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8080 }]
+          {{- include "recoverai.env" . | nindent 10 }}
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
+            periodSeconds: 15
+          resources: {{ toYaml .Values.resources.api | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recoverai.fullname" . }}-worker
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.worker }}
+  selector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-worker }
+  template:
+    metadata:
+      labels: { app: {{ include "recoverai.fullname" . }}-worker }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}/worker:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "recoverai.env" . | nindent 10 }}
+          resources: {{ toYaml .Values.resources.worker | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recoverai.fullname" . }}-ai
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.ai }}
+  selector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-ai }
+  template:
+    metadata:
+      labels: { app: {{ include "recoverai.fullname" . }}-ai }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: ai
+          image: "{{ .Values.image.repository }}/ai-service:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8100 }]
+          envFrom:
+            - configMapRef:
+                name: {{ include "recoverai.fullname" . }}-config
+            - secretRef:
+                name: {{ include "recoverai.fullname" . }}-secrets
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8100 }
+          resources: {{ toYaml .Values.resources.ai | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "recoverai.fullname" . }}-web
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas.web }}
+  selector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-web }
+  template:
+    metadata:
+      labels: { app: {{ include "recoverai.fullname" . }}-web }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: web
+          image: "{{ .Values.image.repository }}/web:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 3000 }]
+          env:
+            - name: NEXT_PUBLIC_API_BASE
+              value: "https://{{ .Values.ingress.host }}/api/v1"
+          readinessProbe:
+            httpGet: { path: /login, port: 3000 }
+          resources: {{ toYaml .Values.resources.web | nindent 12 }}

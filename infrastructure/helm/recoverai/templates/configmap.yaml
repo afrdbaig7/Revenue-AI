@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "recoverai.fullname" . }}-config
+  labels: {{ include "recoverai.labels" . | nindent 4 }}
+data:
+  DEMO_MODE: "false"
+  EVENT_DISPATCH_MODE: "kafka"
+  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.kafka.bootstrapServers | quote }}
+  TEMPORAL_TARGET: {{ .Values.temporal.target | quote }}
+  TEMPORAL_ENABLED: {{ .Values.temporal.enabled | quote }}
+  TEMPORAL_NAMESPACE: {{ .Values.temporal.namespace | quote }}
+  AI_SERVICE_BASE_URL: "http://{{ include "recoverai.fullname" . }}-ai:80"
+  RAZORPAY_API_BASE: {{ .Values.razorpay.apiBase | quote }}
+  RAZORPAY_MOCK_MODE: {{ .Values.razorpay.mockMode | quote }}
+  RAZORPAY_ALLOWED_HOSTS: "api.razorpay.com"
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  LLM_PROVIDER: {{ .Values.ai.provider | quote }}
+  TRACING_ENABLED: "true"
+  JWT_ISSUER: {{ .Values.security.jwtIssuer | quote }}
+  JWT_SECURE_COOKIES: {{ .Values.security.jwtSecureCookies | quote }}
