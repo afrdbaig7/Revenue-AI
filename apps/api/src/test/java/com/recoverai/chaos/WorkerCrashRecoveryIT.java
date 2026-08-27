@@ -2,8 +2,12 @@ package com.recoverai.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.recoverai.incident.infrastructure.RevenueIncidentRepository;
+import com.recoverai.merchant.infrastructure.MerchantRepository;
 import com.recoverai.recovery.domain.RecoveryAction;
 import com.recoverai.recovery.infrastructure.RecoveryActionRepository;
+import com.recoverai.support.PersistenceTestFixtures;
+import com.recoverai.tenant.infrastructure.OrganizationRepository;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -46,11 +50,16 @@ class WorkerCrashRecoveryIT {
   }
 
   @Autowired RecoveryActionRepository actions;
+  @Autowired OrganizationRepository organizations;
+  @Autowired MerchantRepository merchants;
+  @Autowired RevenueIncidentRepository incidents;
 
   @Test
   void workerCrashRecoversSuccessfullyAndIdempotencyProtectsData() {
-    UUID orgId = UUID.randomUUID();
-    UUID incidentId = UUID.randomUUID();
+    var fixture = PersistenceTestFixtures.tenantIncident(
+        organizations, merchants, incidents, "Worker Crash");
+    UUID orgId = fixture.orgId();
+    UUID incidentId = fixture.incidentId();
     
     String idempotencyKey = RecoveryAction.idempotencyKeyFor(incidentId, "PAYMENT_RETRY", 1);
     RecoveryAction action = new RecoveryAction(orgId, incidentId, "PAYMENT_RETRY", 1, Instant.now(), idempotencyKey);

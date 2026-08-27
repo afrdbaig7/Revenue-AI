@@ -3,6 +3,7 @@ package com.recoverai.common.util;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Component;
 
 /**
@@ -18,20 +19,26 @@ public class InMemoryRateLimiter implements RateLimiter {
 
   @Override
   public boolean tryAcquire(String key, int max, Duration window) {
+    if (max <= 0) {
+      return false;
+    }
     long now = System.currentTimeMillis();
     long windowMillis = window.toMillis();
-    return buckets.compute(
-            key,
-            (k, w) -> {
-              if (w == null || now - w.windowStart >= windowMillis) {
-                return new Window(now, 1);
-              }
-              if (w.count >= max) {
-                return w;
-              }
-              return new Window(w.windowStart, w.count + 1);
-            })
-        .count() <= max;
+    AtomicBoolean allowed = new AtomicBoolean();
+    buckets.compute(
+        key,
+        (k, w) -> {
+          if (w == null || now - w.windowStart >= windowMillis) {
+            allowed.set(true);
+            return new Window(now, 1);
+          }
+          if (w.count >= max) {
+            return w;
+          }
+          allowed.set(true);
+          return new Window(w.windowStart, w.count + 1);
+        });
+    return allowed.get();
   }
 
   public void clear() {

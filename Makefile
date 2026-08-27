@@ -54,7 +54,7 @@ test-unit: ## Backend unit tests only
 	cd $(API_DIR) && mvn -q test -Dtest='*Test' -DfailIfNoTests=false
 
 test-it: ## Backend integration tests (requires Docker)
-	cd $(API_DIR) && mvn -q verify -Dtest='*IT' -DfailIfNoTests=false
+	cd $(API_DIR) && mvn -q verify -Dit.test='*IT' -DfailIfNoTests=false
 
 lint: ## Lint backend + frontend + AI service
 	cd $(API_DIR) && mvn -q spotless:check

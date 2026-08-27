@@ -2,16 +2,21 @@ package com.recoverai.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.recoverai.tenant.domain.Organization;
 import com.recoverai.tenant.infrastructure.OrganizationRepository;
+import java.time.Duration;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -27,6 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     "recoverai.event-dispatch-mode=inline",
     "recoverai.razorpay.mock-mode=true",
     "recoverai.ai.enabled=false",
+    "spring.datasource.hikari.connection-timeout=1000",
     "spring.jpa.hibernate.ddl-auto=validate"
 })
 class DatabaseRestartIT {
@@ -51,20 +57,28 @@ class DatabaseRestartIT {
     Organization org = organizations.save(new Organization("Pre-Crash Org", "pre-" + UUID.randomUUID()));
     assertThat(organizations.findById(org.getId())).isPresent();
 
-    // Simulate database crash
-    POSTGRES.stop();
-
-    // Verify application handles failure gracefully (JDBC Connection Exception)
-    assertThatThrownBy(() -> {
-      organizations.saveAndFlush(new Organization("In-Flight Org", "mid-" + UUID.randomUUID()));
-    }).isInstanceOf(org.springframework.transaction.CannotCreateTransactionException.class)
-      .hasMessageContaining("Could not open JPA EntityManager");
-
-    // Restart the database to test connection pool recovery
-    POSTGRES.start();
+    // Pause the existing container so its durable data remains available after recovery.
+    String containerId = POSTGRES.getContainerId();
+    DockerClientFactory.instance().client().pauseContainerCmd(containerId).exec();
+    try {
+      assertThatThrownBy(
+              () ->
+                  organizations.saveAndFlush(
+                      new Organization("In-Flight Org", "mid-" + UUID.randomUUID())))
+          .isInstanceOfAny(
+              CannotCreateTransactionException.class, DataAccessResourceFailureException.class);
+    } finally {
+      DockerClientFactory.instance().client().unpauseContainerCmd(containerId).exec();
+    }
 
     // Verify application resumes operation and connection pool is healthy
-    Organization recoveredOrg = organizations.save(new Organization("Post-Crash Org", "post-" + UUID.randomUUID()));
+    await()
+        .atMost(Duration.ofSeconds(30))
+        .ignoreExceptions()
+        .untilAsserted(() -> assertThat(organizations.findById(org.getId())).isPresent());
+    Organization recoveredOrg =
+        organizations.save(
+            new Organization("Post-Crash Org", "post-" + UUID.randomUUID()));
     assertThat(organizations.findById(recoveredOrg.getId())).isPresent();
     assertThat(organizations.findById(org.getId())).isPresent();
   }

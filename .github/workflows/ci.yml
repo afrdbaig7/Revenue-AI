@@ -35,7 +35,7 @@ jobs:
         run: mvn -B test
       - name: Backend integration tests (Testcontainers)
         working-directory: apps/api
-        run: mvn -B verify -Dtest='*IT' -DfailIfNoTests=false
+        run: mvn -B verify -Dit.test='*IT' -DfailIfNoTests=false
       - name: Dependency vulnerability scan
         working-directory: apps/api
         run: mvn -B org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=9 -DskipProvidedScope=true

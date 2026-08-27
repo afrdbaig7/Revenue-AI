@@ -1,12 +1,13 @@
 package com.recoverai.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.recoverai.outbox.domain.OutboxEvent;
 import com.recoverai.outbox.infrastructure.OutboxEventRepository;
-import java.time.Duration;
+import com.recoverai.support.PersistenceTestFixtures;
+import com.recoverai.tenant.infrastructure.OrganizationRepository;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,7 +17,6 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Chaos test: Kafka/Redpanda is unavailable.
@@ -51,10 +51,11 @@ class KafkaUnavailableIT {
   @Autowired OutboxEventRepository outboxEvents;
   @Autowired KafkaTemplate<String, String> kafkaTemplate;
   @Autowired ObjectMapper mapper;
+  @Autowired OrganizationRepository organizations;
 
   @Test
   void outboxEventsPersistedWhenKafkaDown() throws Exception {
-    UUID orgId = UUID.randomUUID();
+    UUID orgId = PersistenceTestFixtures.organization(organizations, "Kafka Unavailable").getId();
     OutboxEvent event = new OutboxEvent(orgId, "Incident", UUID.randomUUID().toString(), "INCIDENT_CREATED", mapper.readTree("{}"));
     outboxEvents.save(event);
 
@@ -65,7 +66,7 @@ class KafkaUnavailableIT {
     
     // Attempting to send directly via Kafka will fail because Kafka is down
     try {
-      kafkaTemplate.send("recoverai-events", event.getId().toString(), "{}").get();
+      kafkaTemplate.send("recoverai-events", event.getId().toString(), "{}").get(5, TimeUnit.SECONDS);
     } catch (Exception e) {
       // Expected failure due to unavailable Kafka
     }

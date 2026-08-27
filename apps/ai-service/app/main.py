@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from . import fallback
 from .config import get_settings
 from .prompts import DIAGNOSIS_SYSTEM, EXPLAIN_SYSTEM, PROMISE_SYSTEM, RANK_SYSTEM
-from .providers import LlmProvider, LlmUnavailable
+from .providers import LlmProvider
 from .schemas import (
     DiagnosisRequest,
     DiagnosisResponse,

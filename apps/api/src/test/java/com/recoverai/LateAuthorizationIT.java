@@ -3,6 +3,7 @@ package com.recoverai;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.recoverai.audit.application.AuditService;
+import com.recoverai.common.tenant.TenantContext;
 import com.recoverai.incident.application.IncidentService;
 import com.recoverai.incident.domain.IncidentStatus;
 import com.recoverai.incident.domain.RevenueIncident;
@@ -25,9 +26,10 @@ import com.recoverai.recovery.infrastructure.RecoveryDecisionRepository;
 import com.recoverai.tenant.domain.Organization;
 import com.recoverai.tenant.infrastructure.OrganizationRepository;
 import java.time.Instant;
-import org.springframework.data.domain.PageRequest;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -89,9 +91,15 @@ class LateAuthorizationIT {
   @Autowired AuditService audit;
   @Autowired com.recoverai.audit.infrastructure.AuditEventRepository auditEvents;
 
+  @AfterEach
+  void clearTenantContext() {
+    TenantContext.clear();
+  }
+
   @Test
   void lateAuthorizationCancelsRecoveryAndPreventsDoubleCollection() {
     Organization org = organizations.save(new Organization("IT Org", "it-org-" + UUID.randomUUID()));
+    TenantContext.setOrgId(org.getId());
     Merchant merchant = merchants.save(new Merchant(org.getId(), "IT Merchant"));
     MerchantIntegration integration = new MerchantIntegration(org.getId(), merchant.getId(), "razorpay", "TEST");
     integration.setWebhookSecretEncrypted(cipher.encrypt("it-secret"));

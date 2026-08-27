@@ -1,8 +1,6 @@
 """AI service tests: schema validation, malformed model output, provider timeout,
 prompt-injection resistance, and deterministic fallback behavior."""
 
-import json
-
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +13,6 @@ from app.schemas import (
     DiagnosisRequest,
     DiagnosisResponse,
     PromiseExtractRequest,
-    PromiseExtractResponse,
 )
 
 client = TestClient(app)
