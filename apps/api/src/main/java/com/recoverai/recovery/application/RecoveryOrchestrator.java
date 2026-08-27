@@ -752,6 +752,20 @@ public class RecoveryOrchestrator {
           audit.json(Map.of("reason", "Payment became authorized before recovery execution. Duplicate collection prevented.")),
           null,
           null);
+      audit.record(
+          "RECOVERY_CANCELLED",
+          "revenue_incident",
+          incident.getId().toString(),
+          null,
+          "LATE_AUTHORIZED",
+          audit.json(
+              Map.of(
+                  "reason",
+                  "Payment became authorized before recovery execution. Duplicate collection prevented.",
+                  "paymentStatus",
+                  payment.getStatus().name())),
+          null,
+          null);
     }
   }
 

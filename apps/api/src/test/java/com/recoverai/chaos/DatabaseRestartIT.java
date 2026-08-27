@@ -17,7 +17,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.DockerClientFactory;
-import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -46,7 +45,9 @@ class DatabaseRestartIT {
 
   @DynamicPropertySource
   static void datasource(DynamicPropertyRegistry registry) {
-    registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+    registry.add(
+        "spring.datasource.url",
+        () -> POSTGRES.getJdbcUrl() + "?socketTimeout=2&connectTimeout=2");
     registry.add("spring.datasource.username", POSTGRES::getUsername);
     registry.add("spring.datasource.password", POSTGRES::getPassword);
   }
@@ -58,10 +59,10 @@ class DatabaseRestartIT {
     Organization org = organizations.save(new Organization("Pre-Crash Org", "pre-" + UUID.randomUUID()));
     assertThat(organizations.findById(org.getId())).isPresent();
 
-    // Stop, but do not remove, the existing container. This drops open JDBC sockets while
-    // preserving the container's data for the restart assertion.
+    // Pause the existing container. The JDBC socket timeout makes the in-flight request fail
+    // promptly while unpausing preserves the same database and its data.
     String containerId = POSTGRES.getContainerId();
-    DockerClientFactory.instance().client().stopContainerCmd(containerId).withTimeout(5).exec();
+    DockerClientFactory.instance().client().pauseContainerCmd(containerId).exec();
     try {
       assertThatThrownBy(
               () ->
@@ -70,10 +71,7 @@ class DatabaseRestartIT {
           .isInstanceOfAny(
               CannotCreateTransactionException.class, DataAccessResourceFailureException.class);
     } finally {
-      DockerClientFactory.instance().client().startContainerCmd(containerId).exec();
-      Wait.forListeningPort()
-          .withStartupTimeout(Duration.ofSeconds(30))
-          .waitUntilReady(POSTGRES);
+      DockerClientFactory.instance().client().unpauseContainerCmd(containerId).exec();
     }
 
     // Verify application resumes operation and connection pool is healthy
