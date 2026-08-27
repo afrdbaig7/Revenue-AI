@@ -105,6 +105,13 @@ export interface RecoveryAction {
   createdAt: string;
 }
 
+export interface IncidentCommunication {
+  id: string;
+  channel: string;
+  status: string;
+  simulated: boolean;
+}
+
 export interface AuditEvent {
   id: string;
   incidentId: string | null;
@@ -129,7 +136,7 @@ export interface IncidentDetail {
   decision: RecoveryDecision | null;
   actions: RecoveryAction[];
   attempts: unknown[];
-  communications: unknown[];
+  communications: IncidentCommunication[];
   approvals: unknown[];
 }
 

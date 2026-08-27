@@ -242,7 +242,7 @@ export default function IncidentDetailPage() {
             <div className="mt-4">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Customer communications</div>
               <div className="space-y-1.5">
-                {d.communications.map((c: any) => (
+                {d.communications.map((c) => (
                   <div key={c.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-xs">
                     <span className="text-slate-700">{c.channel}</span>
                     <span className="text-[10px] text-slate-400">

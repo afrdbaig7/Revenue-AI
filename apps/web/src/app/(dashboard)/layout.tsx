@@ -4,6 +4,7 @@ import { Sidebar, MobileNav } from "@/components/Sidebar";
 import { useAuth } from "@/lib/auth";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { FullPageLoader } from "@/components/ui";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -16,19 +17,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [loading, user, router]);
 
   if (loading || !user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
-      </div>
-    );
+    return <FullPageLoader label="Preparing your revenue workspace" />;
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="flex min-h-screen bg-[var(--color-background-soft)]">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileNav />
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 lg:px-6">{children}</main>
+        <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-5 sm:px-5 sm:py-6 lg:px-8">{children}</main>
       </div>
     </div>
   );

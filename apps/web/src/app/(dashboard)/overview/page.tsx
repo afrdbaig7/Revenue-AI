@@ -21,8 +21,11 @@ import {
   Legend,
 } from "recharts";
 
-const STRATEGY_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#8b5cf6", "#f43f5e", "#06b6d4", "#64748b"];
-const FAILURE_COLORS = ["#f43f5e", "#f59e0b", "#8b5cf6", "#06b6d4", "#10b981", "#64748b", "#2563eb"];
+const RECOVERED_COLOR = "#00A86B";
+const AT_RISK_COLOR = "#F59E0B";
+const CHART_GRID = "#E6EBF1";
+const CHART_MUTED = "#6B7C93";
+const FAILURE_COLORS = ["#DF1B41", "#F59E0B", "#0A2540", "#6B7C93", "#B45309", "#9F1239", "#425466"];
 
 export default function OverviewPage() {
   const summary = useQuery({ queryKey: ["summary"], queryFn: () => api.get<DashboardSummary>("/dashboard/summary") });
@@ -99,20 +102,20 @@ export default function OverviewPage() {
               <AreaChart data={trendData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="gRecovered" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    <stop offset="5%" stopColor={RECOVERED_COLOR} stopOpacity={0.22} />
+                    <stop offset="95%" stopColor={RECOVERED_COLOR} stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="gAtRisk" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                    <stop offset="5%" stopColor={AT_RISK_COLOR} stopOpacity={0.18} />
+                    <stop offset="95%" stopColor={AT_RISK_COLOR} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#64748b" }} tickLine={false} axisLine={{ stroke: "#e2e8f0" }} />
-                <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
-                <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12 }} />
-                <Area type="monotone" dataKey="recovered" name="Recovered" stroke="#10b981" strokeWidth={2} fill="url(#gRecovered)" />
-                <Area type="monotone" dataKey="atRisk" name="At risk" stroke="#f59e0b" strokeWidth={2} fill="url(#gAtRisk)" />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: CHART_MUTED }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
+                <YAxis tick={{ fontSize: 11, fill: CHART_MUTED }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} contentStyle={{ borderRadius: 10, border: `1px solid ${CHART_GRID}`, fontSize: 12 }} />
+                <Area type="monotone" dataKey="recovered" name="Recovered" stroke={RECOVERED_COLOR} strokeWidth={2} fill="url(#gRecovered)" />
+                <Area type="monotone" dataKey="atRisk" name="At risk" stroke={AT_RISK_COLOR} strokeWidth={2} fill="url(#gAtRisk)" />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -124,13 +127,13 @@ export default function OverviewPage() {
           ) : (
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={strategyData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#64748b" }} tickLine={false} interval={0} angle={-12} textAnchor="end" height={44} />
-                <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
-                <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: CHART_MUTED }} tickLine={false} interval={0} angle={-12} textAnchor="end" height={44} />
+                <YAxis tick={{ fontSize: 11, fill: CHART_MUTED }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                <Tooltip formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`} contentStyle={{ borderRadius: 10, border: `1px solid ${CHART_GRID}`, fontSize: 12 }} />
                 <Bar dataKey="recovered" radius={[4, 4, 0, 0]}>
                   {strategyData.map((_, i) => (
-                    <Cell key={i} fill={STRATEGY_COLORS[i % STRATEGY_COLORS.length]} />
+                    <Cell key={i} fill={RECOVERED_COLOR} />
                   ))}
                 </Bar>
               </BarChart>
@@ -149,7 +152,7 @@ export default function OverviewPage() {
                     <Cell key={i} fill={FAILURE_COLORS[i % FAILURE_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12 }} />
+                <Tooltip contentStyle={{ borderRadius: 10, border: `1px solid ${CHART_GRID}`, fontSize: 12 }} />
                 <Legend wrapperStyle={{ fontSize: 10 }} iconSize={8} />
               </PieChart>
             </ResponsiveContainer>
