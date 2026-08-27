@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  JAVA_VERSION: "21"
+
+jobs:
+  backend:
+    name: Backend (unit + integration + build)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: recoverai
+          POSTGRES_PASSWORD: recoverai_dev
+          POSTGRES_DB: recoverai
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U recoverai" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Backend unit tests
+        working-directory: apps/api
+        run: mvn -B test
+      - name: Backend integration tests (Testcontainers)
+        working-directory: apps/api
+        run: mvn -B verify -Dtest='*IT' -DfailIfNoTests=false
+      - name: Dependency vulnerability scan
+        working-directory: apps/api
+        run: mvn -B org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=9 -DskipProvidedScope=true
+      - name: Build jar
+        working-directory: apps/api
+        run: mvn -B package -DskipTests
+
+  ai-service:
+    name: AI service (lint + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        working-directory: apps/ai-service
+        run: pip install -r requirements.txt
+      - name: Lint (ruff)
+        working-directory: apps/ai-service
+        run: ruff check app tests
+      - name: Tests
+        working-directory: apps/ai-service
+        run: pytest -q
+
+  web:
+    name: Web (typecheck + lint + tests + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        working-directory: apps/web
+        run: npm run typecheck
+      - name: Tests
+        working-directory: apps/web
+        run: npm run test
+      - name: Build
+        working-directory: apps/web
+        run: npm run build
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    needs: [backend, ai-service, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build api image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          tags: recoverai/api:ci
+      - name: Build ai-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/ai-service/Dockerfile
+          push: false
+          tags: recoverai/ai-service:ci
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: false
+          tags: recoverai/web:ci
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: false
+          tags: recoverai/worker:ci
