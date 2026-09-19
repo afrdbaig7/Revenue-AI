@@ -1,10 +1,10 @@
-"use client";
+﻿"use client";
 
-import { Sidebar, MobileNav } from "@/components/Sidebar";
-import { useAuth } from "@/lib/auth";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth";
 import { FullPageLoader } from "@/components/ui";
+import { DashboardShell } from "@/components/layout";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -20,13 +20,5 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return <FullPageLoader label="Preparing your revenue workspace" />;
   }
 
-  return (
-    <div className="flex min-h-screen bg-[var(--color-background-soft)]">
-      <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <MobileNav />
-        <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-5 sm:px-5 sm:py-6 lg:px-8">{children}</main>
-      </div>
-    </div>
-  );
+  return <DashboardShell>{children}</DashboardShell>;
 }

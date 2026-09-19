@@ -1,19 +1,33 @@
-"use client";
+﻿import {
+  LandingNav,
+  HeroSection,
+  ProofGrid,
+  RecoveryLoop,
+  TrustBoundarySection,
+  MoneyRecoveredSection,
+  ExperimentSection,
+  JourneySection,
+  SafetyGrid,
+  ArchitectureSection,
+  LandingFooter,
+} from "@/components/landing";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
-import { FullPageLoader } from "@/components/ui";
-
-export default function Home() {
-  const router = useRouter();
-  const { user, loading } = useAuth();
-
-  useEffect(() => {
-    if (!loading) {
-      router.replace(user ? "/overview" : "/login");
-    }
-  }, [loading, user, router]);
-
-  return <FullPageLoader label="Checking your session" />;
+export default function LandingPage() {
+  return (
+    <div className="min-h-screen bg-[#F6F9FC] text-slate-800 selection:bg-brand-500/20 selection:text-ink-950">
+      <LandingNav />
+      <main>
+        <HeroSection />
+        <ProofGrid />
+        <RecoveryLoop />
+        <TrustBoundarySection />
+        <MoneyRecoveredSection />
+        <ExperimentSection />
+        <JourneySection />
+        <SafetyGrid />
+        <ArchitectureSection />
+      </main>
+      <LandingFooter />
+    </div>
+  );
 }
