@@ -1,8 +1,5 @@
 # RecoverAI
 
-Latest implementation progress, validation results and outstanding release work:
-[26 October implementation handoff](docs/implementation-progress-2026-10-26.md).
-
 **AI Revenue Recovery & Payment Reliability Engine**
 
 RecoverAI detects revenue that is at risk of being lost to failed payments, failed
@@ -74,7 +71,6 @@ Next.js dashboard → Spring Boot API (control plane) → PostgreSQL (system of 
                                               └──► Razorpay Adapter
 ```
 
-Status: [honest audit vs the master build prompt](docs/implementation-status.md) ·
 Docs: [system overview](docs/architecture/system-overview.md) · [data model](docs/architecture/data-model.md) ·
 [payment state machine](docs/architecture/payment-state-machine.md) · [recovery state machine](docs/architecture/recovery-state-machine.md) ·
 [event flow](docs/architecture/event-flow.md) · [security model](docs/architecture/security-model.md) ·

@@ -50,3 +50,9 @@ reports/
 apps/web/test-results/
 apps/web/playwright-report/
 tmp/
+
+# --- Local review and planning documents ---
+/docs/frontend-backend-roadmap-2026-10-25.md
+/docs/implementation-progress-2026-10-26.md
+/docs/implementation-status.md
+/docs/project-review-and-improvement-plan.md
