@@ -11,6 +11,15 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class MigrationCommand {
   @Bean
+  @ConditionalOnProperty(prefix = "recoverai.cli", name = "seed", havingValue = "true")
+  public ApplicationRunner demoSeedRunner(ConfigurableApplicationContext context, com.recoverai.seed.DemoDataSeeder seeder) {
+    return args -> {
+      seeder.seed();
+      SpringApplication.exit(context);
+    };
+  }
+
+  @Bean
   @ConditionalOnProperty(prefix = "recoverai.cli", name = "migrate", havingValue = "true")
   public ApplicationRunner migrationRunner(ConfigurableApplicationContext context) {
     return args -> SpringApplication.exit(context);

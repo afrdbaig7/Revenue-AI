@@ -22,6 +22,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "com\\.recoverai\\.tools\\..*"))
 @EnableScheduling
 @EnableConfigurationProperties(RecoverAiProperties.class)
+@org.springframework.context.annotation.Import(com.recoverai.tools.MigrationCommand.class)
 public class RecoverAiApplication {
 
   public static void main(String[] args) {

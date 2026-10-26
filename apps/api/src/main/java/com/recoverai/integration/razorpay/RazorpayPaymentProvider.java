@@ -45,6 +45,7 @@ public class RazorpayPaymentProvider implements PaymentProvider {
   private final String keyId;
   private final String keySecret;
 
+  @org.springframework.beans.factory.annotation.Autowired
   public RazorpayPaymentProvider(RecoverAiProperties props, ObjectMapper mapper, MeterRegistry registry) {
     this.props = props;
     this.mapper = mapper;
