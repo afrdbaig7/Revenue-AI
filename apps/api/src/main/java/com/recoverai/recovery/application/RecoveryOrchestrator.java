@@ -92,9 +92,11 @@ public class RecoveryOrchestrator {
   private final AuditService audit;
   private final com.recoverai.workflow.application.WorkflowLauncher workflowLauncher;
   private final ObjectMapper mapper;
+  private final org.springframework.transaction.support.TransactionTemplate transactions;
   private final Counter recoveredCounter;
   private final Counter blockedCounter;
   private final Counter lateAuthCounter;
+  private final com.recoverai.analytics.application.SettlementLedger ledger;
 
   public RecoveryOrchestrator(
       RevenueIncidentRepository incidents,
@@ -117,7 +119,10 @@ public class RecoveryOrchestrator {
       AuditService audit,
       com.recoverai.workflow.application.WorkflowLauncher workflowLauncher,
       ObjectMapper mapper,
-      MeterRegistry registry) {
+      MeterRegistry registry, org.springframework.transaction.PlatformTransactionManager transactionManager,
+      com.recoverai.analytics.application.SettlementLedger ledger) {
+    this.ledger = ledger;
+    this.transactions = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
     this.incidents = incidents;
     this.payments = payments;
     this.policySets = policySets;
@@ -170,8 +175,11 @@ public class RecoveryOrchestrator {
         runPipeline(orgId, incidentId); // re-enter under the same lock (same tx)
       }
       case RECONCILING -> {
-        Payment reconciled = payment == null ? null : paymentService.reconcileFromProvider(orgId, payment);
-        if (reconciled != null && reconciled.getStatus().isCollectable()) {
+        var reconciliation = payment == null ? null : paymentService.reconcileFromProvider(orgId, payment);
+        if (reconciliation != null && !reconciliation.verified()) return;
+        Payment reconciled = reconciliation == null ? null : reconciliation.payment();
+        if (reconciled != null && reconciled.getStatus() == PaymentStatus.CAPTURED) {
+          ledger.capture(orgId, incident, reconciled);
           incidentService.markRecovered(orgId, incidentId, reconciled.getAmountMinor(), 0);
           audit.record(
               "PAYMENT_ALREADY_COLLECTED",
@@ -182,6 +190,10 @@ public class RecoveryOrchestrator {
               null,
               null,
               null);
+          return;
+        }
+        if (reconciled != null && reconciled.getStatus().isCollectable()) {
+          handleLateAuthorization(orgId, incident, null, reconciled);
           return;
         }
         if (reconciled != null && reconciled.getStatus() != PaymentStatus.FAILED) {
@@ -233,6 +245,11 @@ public class RecoveryOrchestrator {
         if (incident.getRecoveryWindowEndsAt() != null
             && incident.getRecoveryWindowEndsAt().isBefore(Instant.now())) {
           incidentService.transition(orgId, incidentId, IncidentStatus.AWAITING_APPROVAL, IncidentStatus.EXPIRED, "approval window elapsed");
+          approvals.findByIncidentIdAndStatus(incidentId, Approval.Status.PENDING).forEach(approval -> {
+            approval.setStatus(Approval.Status.EXPIRED);
+            approval.setDecidedAt(Instant.now());
+            approvals.save(approval);
+          });
         }
       }
       case SCHEDULED -> {
@@ -249,6 +266,21 @@ public class RecoveryOrchestrator {
           incident.setStatus(IncidentStatus.RETRYABLE_FAILURE);
           incidents.save(incident);
           runPipeline(orgId, incidentId);
+        }
+      }
+      case AWAITING_PAYMENT -> {
+        if (incident.getNextActionAt() != null && incident.getNextActionAt().isAfter(Instant.now())) return;
+        incident.setNextActionAt(Instant.now().plusSeconds(300));
+        incidents.save(incident);
+        if (payment != null) {
+          var result = paymentService.reconcileFromProvider(orgId, payment);
+          if (result.verified() && result.payment().getStatus().isCollectable()) {
+            onPaymentCollected(orgId, result.payment());
+            return;
+          }
+        }
+        if (incident.getRecoveryWindowEndsAt() != null && !incident.getRecoveryWindowEndsAt().isAfter(Instant.now())) {
+          incidentService.transitionBestEffort(orgId, incidentId, IncidentStatus.EXPIRED, "No payment confirmed before deadline");
         }
       }
       case RETRYABLE_FAILURE -> {
@@ -280,7 +312,10 @@ public class RecoveryOrchestrator {
   // ---------------------------------------------------------------------------
 
   private void selectStrategy(UUID orgId, RevenueIncident incident, Payment payment) {
-    List<CandidateGenerator.CandidateSeed> seeds = candidateGenerator.generate(incident, payment);
+    List<CandidateGenerator.CandidateSeed> seeds = candidateGenerator.generate(incident, payment).stream()
+        .filter(seed -> com.recoverai.recovery.domain.StrategyCapabilities.executable(seed.strategy()))
+        .filter(seed -> seed.strategy().equals("NO_ACTION") || policyEngine.evaluate(activePolicy(orgId), payment, seed.strategy(), incident.getAttemptsCount(), incident.getContactCount(), Instant.now(), incident.getAmountMinor()).allowed())
+        .toList();
     FailureCategory category = categoryOf(incident, payment);
     boolean businessHours = businessHoursNow();
     DecisionEngine.EvInput input = new DecisionEngine.EvInput(
@@ -475,119 +510,120 @@ public class RecoveryOrchestrator {
   // Execution (called by the action scheduler; re-validates everything)
   // ---------------------------------------------------------------------------
 
-  @Transactional
+  /** Claim and outcome transactions bracket external I/O. EXECUTING is a durable intent. */
   public void executeAction(UUID orgId, UUID actionId) {
-    RecoveryAction action = actions
-        .findByIdForUpdate(actionId)
+    RecoveryAction snapshot = actions.findById(actionId).filter(a -> a.getOrgId().equals(orgId))
         .orElseThrow(() -> com.recoverai.common.api.ApiException.notFound("Action not found"));
-    if (action.getStatus() != Status.SCHEDULED) {
-      return; // idempotent: already executed/cancelled/blocked
-    }
-    RevenueIncident incident = incidents
-        .findByIdForUpdate(action.getIncidentId())
-        .orElseThrow(() -> com.recoverai.common.api.ApiException.notFound("Incident not found"));
-    if (!incident.getOrgId().equals(orgId) || incident.getStatus().isTerminal()) {
-      cancelAction(action, "incident not actionable");
-      return;
-    }
-
-    // 1. Reconcile current payment state BEFORE anything that could take money.
-    Payment payment = incident.getPaymentId() == null
-        ? null
-        : payments.findById(incident.getPaymentId()).orElse(null);
-    if (payment != null) {
-      payment = paymentService.reconcileFromProvider(orgId, payment);
-      if (payment.getStatus().isCollectable()) {
-        handleLateAuthorization(orgId, incident, action, payment);
+    if (snapshot.getStatus() != Status.SCHEDULED || snapshot.getScheduledFor().isAfter(Instant.now())) return;
+    RevenueIncident initial = incidentService.get(orgId, snapshot.getIncidentId());
+    Payment initialPayment = initial.getPaymentId() == null ? null : payments.findByOrgIdAndId(orgId, initial.getPaymentId()).orElseThrow();
+    if (initialPayment != null) {
+      var verified = paymentService.reconcileFromProvider(orgId, initialPayment);
+      if (!verified.verified()) {
+        transactions.executeWithoutResult(tx -> {
+          RecoveryAction pending = actions.findByIdForUpdate(actionId).orElseThrow();
+          if (pending.getStatus() == Status.SCHEDULED) {
+            pending.setScheduledFor(Instant.now().plusSeconds(60));
+            pending.setError("Reconciliation unavailable; execution deferred");
+            actions.save(pending);
+          }
+        });
         return;
       }
-      if (payment.getStatus() != PaymentStatus.FAILED) {
-        return; // still pending — keep waiting
-      }
     }
+    Execution execution = transactions.execute(tx -> prepareExecution(orgId, actionId));
+    if (execution == null) return;
+    try {
+      String result = dispatch(execution.action(), execution.incident());
+      transactions.executeWithoutResult(tx -> finishExecution(orgId, execution, result, null));
+    } catch (ProviderException error) {
+      transactions.executeWithoutResult(tx -> finishExecution(orgId, execution, null, execution.action().getProviderReference() == null ? error.category() : "AMBIGUOUS"));
+    } catch (Exception error) {
+      // Unknown acceptance is never retried blindly. A worker crash takes the same path via the lease sweep.
+      transactions.executeWithoutResult(tx -> finishExecution(orgId, execution, null, "AMBIGUOUS"));
+    }
+  }
 
-    // 2. Policy re-check with current state.
+  private record Execution(RecoveryAction action, RevenueIncident incident) {}
+
+  private Execution prepareExecution(UUID orgId, UUID actionId) {
+    RecoveryAction action = actions.findByIdForUpdate(actionId).orElseThrow();
+    if (!action.getOrgId().equals(orgId) || action.getStatus() != Status.SCHEDULED) return null;
+    RevenueIncident incident = incidents.findByIdForUpdate(action.getIncidentId()).orElseThrow();
+    if (!incident.getOrgId().equals(orgId)) throw com.recoverai.common.api.ApiException.notFound("Incident not found");
+    if (incident.getStatus().isTerminal()) { cancelAction(action, "incident not actionable"); return null; }
+    Payment payment = incident.getPaymentId() == null ? null : payments.findByOrgIdAndId(orgId, incident.getPaymentId()).orElseThrow();
+    if (payment != null && payment.getStatus().isCollectable()) {
+      if (payment.getStatus() == PaymentStatus.CAPTURED) onPaymentCollected(orgId, payment);
+      else handleLateAuthorization(orgId, incident, action, payment);
+      return null;
+    }
+    if (payment != null && payment.getStatus() != PaymentStatus.FAILED) return null;
     PolicySet policy = activePolicy(orgId);
-    Evaluation evaluation = policyEngine.evaluate(
-        policy, payment, action.getStrategy(), incident.getAttemptsCount(),
-        incident.getContactCount(), Instant.now(), incident.getAmountMinor());
+    Evaluation evaluation = policyEngine.evaluate(policy, payment, action.getStrategy(), incident.getAttemptsCount(), incident.getContactCount(), Instant.now(), incident.getAmountMinor());
     if (!evaluation.allowed()) {
       action.setStatus(Status.BLOCKED);
       action.setError("policy: " + evaluation.blockingRule());
       actions.save(action);
       blockedCounter.increment();
-      incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.BLOCKED, "policy blocked at execution: " + evaluation.blockingRule());
-      audit.record("POLICY_BLOCKED", "recovery_action", actionId.toString(), incident.getId(), "SCHEDULED", "BLOCKED", audit.json(evaluation.checks()), null, null);
-      return;
+      incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.BLOCKED, action.getError());
+      return null;
     }
-    if (incident.getRecoveryWindowEndsAt() != null
-        && incident.getRecoveryWindowEndsAt().isBefore(Instant.now())) {
+    if (incident.getRecoveryWindowEndsAt() != null && !incident.getRecoveryWindowEndsAt().isAfter(Instant.now())) {
       cancelAction(action, "recovery window expired");
       incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.EXPIRED, "recovery window expired");
-      return;
+      return null;
     }
-    if (customerOptedOut(incident)) {
-      cancelAction(action, "customer opted out");
-      optOut(orgId, incident.getId());
-      return;
-    }
-
-    // 3. Execute.
+    if (customerOptedOut(incident)) { cancelAction(action, "customer opted out"); optOut(orgId, incident.getId()); return null; }
     action.setStatus(Status.EXECUTING);
+    action.setLeaseUntil(Instant.now().plusSeconds(120));
     actions.save(action);
+    incident.setAttemptsCount(incident.getAttemptsCount() + 1);
     incident.setStatus(IncidentStatus.EXECUTING);
     incidents.save(incident);
-    audit.record(
-        "ACTION_EXECUTING",
-        "recovery_action",
-        actionId.toString(),
-        incident.getId(),
-        "SCHEDULED",
-        "EXECUTING",
-        audit.json(Map.of("strategy", action.getStrategy(), "attempt", action.getAttemptNumber())),
-        null,
-        null);
+    audit.record("ACTION_EXECUTING", "recovery_action", actionId.toString(), incident.getId(), "SCHEDULED", "EXECUTING", audit.json(Map.of("operationKey", action.getIdempotencyKey())), null, null);
+    return new Execution(action, incident);
+  }
 
-    try {
-      String result = dispatch(action, incident);
-      action.setStatus(Status.SUCCEEDED);
-      action.setResult(result);
-      action.setExecutedAt(Instant.now());
-      actions.save(action);
-
-      incident.setAttemptsCount(incident.getAttemptsCount() + 1);
+  private void finishExecution(UUID orgId, Execution execution, String result, String failure) {
+    RecoveryAction action = actions.findByIdForUpdate(execution.action().getId()).orElseThrow();
+    RevenueIncident incident = incidents.findByIdForUpdate(action.getIncidentId()).orElseThrow();
+    action.setProviderReference(execution.action().getProviderReference());
+    // Store correlation fields, not raw provider responses containing customer data.
+    action.setExecutedAt(Instant.now());
+    action.setLeaseUntil(null);
+    boolean ambiguous = "TRANSIENT".equals(failure) || "AMBIGUOUS".equals(failure);
+    action.setStatus(failure == null ? Status.SUCCEEDED : ambiguous ? Status.AMBIGUOUS : Status.FAILED);
+    action.setResult(result);
+    action.setError(failure);
+    actions.save(action);
+    attempts.save(new RecoveryAttempt(orgId, incident.getId(), action.getId(), action.getAttemptNumber(), action.getStrategy(), action.getStatus().name()));
+    audit.record("ACTION_OUTCOME", "recovery_action", action.getId().toString(), incident.getId(), "EXECUTING", action.getStatus().name(), null, audit.json(nullSafeMap("result", result, "failure", failure, "providerReference", action.getProviderReference())), null);
+    if (incident.getStatus().isTerminal()) return;
+    if (ambiguous) {
+      incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.ESCALATED, "Provider acceptance uncertain; reconcile before retrying");
+    } else if (failure != null) {
+      boolean retry = "RATE_LIMITED".equals(failure) && incident.getAttemptsCount() < activePolicy(orgId).getMaxRetries();
+      incidentService.transitionBestEffort(orgId, incident.getId(), retry ? IncidentStatus.RETRYABLE_FAILURE : IncidentStatus.FAILED, failure);
+      if (retry) runPipeline(orgId, incident.getId());
+    } else {
+      incident.setStatus(IncidentStatus.AWAITING_PAYMENT);
+      incident.setNextActionAt(Instant.now().plusSeconds(300));
       incidents.save(incident);
-
-      attempts.save(new RecoveryAttempt(orgId, incident.getId(), action.getId(), action.getAttemptNumber(), action.getStrategy(), "SUCCEEDED"));
-      audit.record(
-          "ACTION_EXECUTED",
-          "recovery_action",
-          actionId.toString(),
-          incident.getId(),
-          "EXECUTING",
-          "SUCCEEDED",
-          audit.json(nullSafeMap(
-              "strategy", action.getStrategy(),
-              "result", result,
-              "providerReference", action.getProviderReference())),
-          null,
-          null);
-    } catch (ProviderException e) {
-      action.setStatus(Status.FAILED);
-      action.setError(truncate(e.getMessage(), 400));
-      action.setExecutedAt(Instant.now());
-      actions.save(action);
-      attempts.save(new RecoveryAttempt(orgId, incident.getId(), action.getId(), action.getAttemptNumber(), action.getStrategy(), "FAILED"));
-      audit.record("ACTION_FAILED", "recovery_action", actionId.toString(), incident.getId(), "EXECUTING", "FAILED", null, audit.json(Map.of("error", e.getMessage(), "category", e.category())), null);
-
-      boolean transientFailure = e.category().equals("TRANSIENT") || e.category().equals("RATE_LIMITED");
-      if (transientFailure && incident.getAttemptsCount() < policy.getMaxRetries()) {
-        incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.RETRYABLE_FAILURE, "transient provider failure: " + e.getMessage());
-        runPipeline(orgId, incident.getId());
-      } else {
-        incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.FAILED, "provider failure: " + e.getMessage());
-      }
     }
+  }
+
+  @Transactional
+  public void recoverAbandonedAction(UUID orgId, UUID actionId) {
+    RecoveryAction action = actions.findByIdForUpdate(actionId).orElseThrow();
+    if (!action.getOrgId().equals(orgId) || action.getStatus() != Status.EXECUTING
+        || action.getLeaseUntil() == null || action.getLeaseUntil().isAfter(Instant.now())) return;
+    action.setStatus(Status.AMBIGUOUS);
+    action.setError("Worker stopped before acceptance was recorded; operator reconciliation required");
+    actions.save(action);
+    RevenueIncident incident = incidentService.get(orgId, action.getIncidentId());
+    if (!incident.getStatus().isTerminal()) incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.ESCALATED, action.getError());
+    audit.record("ACTION_ACCEPTANCE_UNKNOWN", "recovery_action", actionId.toString(), action.getIncidentId(), "EXECUTING", "AMBIGUOUS", null, null, null);
   }
 
   /** Executes the strategy via the real adapter (mock in demo mode, labeled SIMULATED). */
@@ -603,10 +639,10 @@ public class RecoveryOrchestrator {
             customerPhone(incident),
             incident.getId().toString());
         action.setProviderReference(link.id());
-        action.setProviderResponse(mapper.valueToTree(link.raw()));
+
         if (incident.getCustomerId() != null) {
           PolicySet policy = activePolicy(incident.getOrgId());
-          communicationService.sendRecoveryMessage(
+          sendMessage(action,
               incident.getOrgId(),
               incident.getId(),
               incident.getCustomerId(),
@@ -620,21 +656,20 @@ public class RecoveryOrchestrator {
               incident.getContactCount(),
               policy.getMaxContactAttempts(),
               Duration.ofHours(policy.getContactCooldownHours()));
-          incident.setContactCount(incident.getContactCount() + 1);
-          incidents.save(incident);
+
         }
         return link.shortUrl() == null ? "PAYMENT_LINK_CREATED" : "PAYMENT_LINK_CREATED";
       }
       case "DELAYED_RETRY" -> {
         ProviderOrder order = provider.createOrder(amount, incident.getCurrency(), "recoverai-" + incident.getId().toString().substring(0, 8));
         action.setProviderReference(order.id());
-        action.setProviderResponse(mapper.valueToTree(order.raw()));
+
         return "ORDER_CREATED";
       }
       case "EMAIL_NUDGE", "WHATSAPP_NUDGE", "SMS_NUDGE" -> {
         if (incident.getCustomerId() != null) {
           PolicySet policy = activePolicy(incident.getOrgId());
-          communicationService.sendRecoveryMessage(
+          sendMessage(action,
               incident.getOrgId(),
               incident.getId(),
               incident.getCustomerId(),
@@ -644,15 +679,14 @@ public class RecoveryOrchestrator {
               incident.getContactCount(),
               policy.getMaxContactAttempts(),
               Duration.ofHours(policy.getContactCooldownHours()));
-          incident.setContactCount(incident.getContactCount() + 1);
-          incidents.save(incident);
+
         }
         return "MESSAGE_SENT";
       }
       case "BOUNDED_DISCOUNT" -> {
         if (incident.getCustomerId() != null) {
           PolicySet policy = activePolicy(incident.getOrgId());
-          communicationService.sendRecoveryMessage(
+          sendMessage(action,
               incident.getOrgId(),
               incident.getId(),
               incident.getCustomerId(),
@@ -662,17 +696,26 @@ public class RecoveryOrchestrator {
               incident.getContactCount(),
               policy.getMaxContactAttempts(),
               Duration.ofHours(policy.getContactCooldownHours()));
-          incident.setContactCount(incident.getContactCount() + 1);
-          incidents.save(incident);
+
         }
         return "DISCOUNT_OFFERED";
       }
       case "WAIT_FOR_PROVIDER_RETRY" -> {
         return "WAITING";
       }
-      default -> {
-        return "NOOP";
-      }
+      default -> throw new ProviderException("UNSUPPORTED", "Strategy has no executor");
+    }
+  }
+
+  private void sendMessage(RecoveryAction action, UUID orgId, UUID incidentId, UUID customerId, Channel channel, String template,
+      Map<String, String> vars, int contacts, int maxContacts, Duration cooldown) throws ProviderException {
+    vars = new java.util.HashMap<>(vars);
+    vars.put("_operationKey", action.getIdempotencyKey());
+    vars.put("_strategy", action.getStrategy());
+    var message = communicationService.sendRecoveryMessage(orgId, incidentId, customerId, channel, template, vars, contacts, maxContacts, cooldown);
+    if (message.getStatus() != com.recoverai.communication.domain.Communication.Status.SENT
+        && message.getStatus() != com.recoverai.communication.domain.Communication.Status.SIMULATED) {
+      throw new ProviderException("POLICY", "Communication was not accepted");
     }
   }
 
@@ -716,17 +759,27 @@ public class RecoveryOrchestrator {
   /** Payment captured/authorized — incident is resolved (money safe). */
   @Transactional
   public void onPaymentCollected(UUID orgId, Payment payment) {
-    Optional<RevenueIncident> open = incidentService.findOpenIncidentForPayment(orgId, payment.getId());
+    Optional<RevenueIncident> open = incidents.findByOrgIdAndPaymentId(orgId, payment.getId());
     if (open.isEmpty()) {
       return;
     }
     RevenueIncident incident = open.get();
+    if (payment.getStatus() == PaymentStatus.REFUNDED || payment.getStatus() == PaymentStatus.PARTIALLY_REFUNDED) {
+      ledger.refund(orgId, payment.getId(), payment.getProviderFailureDetails() == null ? payment.getAmountMinor()
+          : payment.getProviderFailureDetails().path("amount_refunded").asLong(payment.getAmountMinor()));
+      return;
+    }
     if (payment.getStatus() == PaymentStatus.CAPTURED) {
+      boolean newCapture = ledger.capture(orgId, incident, payment);
+      if (incident.getStatus().isTerminal() && incident.getStatus() != IncidentStatus.LATE_AUTHORIZED && incident.getStatus() != IncidentStatus.RECOVERED) {
+        if (newCapture) audit.record("CAPTURE_AFTER_CLOSURE", "payment", payment.getId().toString(), incident.getId(), null, "CAPTURED", null, null, null);
+        return;
+      }
       actions.findByIncidentIdOrderByCreatedAtAsc(incident.getId()).stream()
           .filter(a -> a.getStatus() == Status.SCHEDULED || a.getStatus() == Status.EXECUTING)
           .forEach(a -> cancelAction(a, "payment captured"));
       incidentService.markRecovered(orgId, incident.getId(), payment.getAmountMinor(), incident.getInterventionCostMinor());
-      recoveredCounter.increment();
+      if (newCapture) recoveredCounter.increment();
       audit.record(
           "PAYMENT_RECOVERED",
           "revenue_incident",
@@ -767,6 +820,21 @@ public class RecoveryOrchestrator {
           null,
           null);
     }
+  }
+
+  @Transactional
+  public void onReplacementCaptured(UUID orgId, UUID incidentId, Payment payment) {
+    RevenueIncident incident = incidents.findByIdForUpdate(incidentId)
+        .filter(i -> i.getOrgId().equals(orgId)).orElseThrow(() -> com.recoverai.common.api.ApiException.notFound("Incident not found"));
+    if (payment.getStatus() != PaymentStatus.CAPTURED) return;
+    ledger.capture(orgId, incident, payment);
+    if (incident.getStatus().isTerminal() && incident.getStatus() != IncidentStatus.RECOVERED && incident.getStatus() != IncidentStatus.LATE_AUTHORIZED) {
+      audit.record("REPLACEMENT_CAPTURE_AFTER_CLOSURE", "payment", payment.getId().toString(), incidentId, null, "CAPTURED", null, null, null);
+      return;
+    }
+    incidentService.markRecovered(orgId, incidentId, payment.getAmountMinor(), incident.getInterventionCostMinor());
+    cancelPendingActions(orgId, incidentId, "Replacement payment captured");
+    audit.record("REPLACEMENT_CAPTURE_CONFIRMED", "payment", payment.getId().toString(), incidentId, null, "CAPTURED", null, null, null);
   }
 
   /** Customer opted out — hard stop. */

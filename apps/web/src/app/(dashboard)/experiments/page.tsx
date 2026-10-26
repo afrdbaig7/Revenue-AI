@@ -1,6 +1,8 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTenantQuery as useQuery } from "@/lib/queries";
+
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { Experiment } from "@/lib/types";
 import { formatINR, formatPercent } from "@/lib/format";

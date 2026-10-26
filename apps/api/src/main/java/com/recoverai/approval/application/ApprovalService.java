@@ -43,6 +43,11 @@ public class ApprovalService {
     RevenueIncident incident = incidents
         .findByIdForUpdate(approval.getIncidentId())
         .orElseThrow(() -> ApiException.notFound("Incident not found"));
+    if (!incident.getOrgId().equals(orgId) || incident.getStatus() != IncidentStatus.AWAITING_APPROVAL
+        || (incident.getRecoveryWindowEndsAt() != null && !incident.getRecoveryWindowEndsAt().isAfter(Instant.now()))
+        || !approval.getProposal().path("strategy").asText().equals(incident.getSelectedStrategy())) {
+      throw ApiException.conflict("Proposal expired or changed; reload the incident");
+    }
 
     approval.setStatus(Approval.Status.APPROVED);
     approval.setDecidedBy(actor.userId());
@@ -51,7 +56,7 @@ public class ApprovalService {
     approvals.save(approval);
 
     if (incident.getStatus() == IncidentStatus.AWAITING_APPROVAL) {
-      PolicySet policy = policySets.findByOrgIdAndActiveTrue(orgId).orElse(null);
+      PolicySet policy = policySets.findByOrgIdAndActiveTrue(orgId).orElseThrow(() -> ApiException.conflict("Active policy missing"));
       incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.SCHEDULED, "approved");
       orchestrator.scheduleAction(orgId, incident, policy);
     }
@@ -85,7 +90,7 @@ public class ApprovalService {
         .orElseThrow(() -> ApiException.notFound("Incident not found"));
     if (incident.getStatus() == IncidentStatus.AWAITING_APPROVAL) {
       orchestrator.cancelPendingActions(orgId, incident.getId(), "approval rejected");
-      incidents.save(incident);
+      incidentService.transitionBestEffort(orgId, incident.getId(), IncidentStatus.CANCELLED, "approval rejected");
     }
     audit.record(
         "REJECTED",
@@ -102,7 +107,7 @@ public class ApprovalService {
 
   private Approval getScoped(UUID orgId, UUID approvalId) {
     return approvals
-        .findByOrgIdAndId(orgId, approvalId)
+        .findScopedForUpdate(orgId, approvalId)
         .orElseThrow(() -> ApiException.notFound("Approval not found"));
   }
 }

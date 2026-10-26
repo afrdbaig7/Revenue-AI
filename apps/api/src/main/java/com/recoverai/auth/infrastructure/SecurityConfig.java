@@ -32,6 +32,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
+  @org.springframework.beans.factory.annotation.Value("${recoverai.process-role:all}")
+  private String processRole = "all";
+  @org.springframework.beans.factory.annotation.Value("${recoverai.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000}")
+  private String allowedOrigins;
 
   @Bean
   public PasswordEncoder passwordEncoder() {
@@ -42,9 +46,13 @@ public class SecurityConfig {
   public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter, ObjectMapper mapper)
       throws Exception {
     CsrfTokenRequestAttributeHandler csrfHandler = new BearerAwareCsrfHandler();
+    CookieCsrfTokenRepository csrfRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
+    csrfRepository.setCookieName("ra_csrf");
+    csrfRepository.setHeaderName("X-CSRF-Token");
+    csrfRepository.setCookiePath("/");
 
     http.csrf(csrf -> csrf
-            .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+            .csrfTokenRepository(csrfRepository)
             .csrfTokenRequestHandler(csrfHandler)
             // Signature-authenticated; JSON-body login/refresh are CSRF-resistant
             // (application/json + SameSite=Lax + CORS allowlist).
@@ -52,13 +60,16 @@ public class SecurityConfig {
                 "/api/v1/webhooks/**", "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/csrf"))
         .cors(cors -> cors.configurationSource(corsConfigurationSource()))
         .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-        .authorizeHttpRequests(auth -> auth
+        .authorizeHttpRequests(auth -> {
+          if ("worker".equals(processRole)) auth.requestMatchers("/api/**").denyAll();
+          auth
             .requestMatchers(HttpMethod.GET, "/actuator/health/**", "/actuator/prometheus", "/actuator/metrics").permitAll()
             .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error", "/favicon.ico").permitAll()
             .requestMatchers(HttpMethod.POST, "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll()
             .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf").permitAll()
             .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/**").permitAll()
-            .anyRequest().authenticated())
+            .anyRequest().authenticated();
+        })
         .exceptionHandling(ex -> ex
             .authenticationEntryPoint((req, res, e) ->
                 BearerAwareCsrfHandler.writeJson(res, mapper, 401, ErrorCode.UNAUTHENTICATED.name(), "Authentication required"))
@@ -72,9 +83,7 @@ public class SecurityConfig {
   @Bean
   public CorsConfigurationSource corsConfigurationSource() {
     CorsConfiguration config = new CorsConfiguration();
-    config.addAllowedOrigin("http://localhost:3000");
-    config.addAllowedOrigin("http://127.0.0.1:3000");
-    config.addAllowedOriginPattern("https://*-*.e2b.app");
+    for (String origin : allowedOrigins.split(",")) config.addAllowedOrigin(origin.trim());
     config.setAllowCredentials(true);
     config.addAllowedHeader("*");
     config.addAllowedMethod("*");

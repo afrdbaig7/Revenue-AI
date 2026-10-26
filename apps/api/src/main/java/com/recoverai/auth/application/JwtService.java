@@ -18,7 +18,14 @@ import org.springframework.stereotype.Service;
 public class JwtService {
 
   private final RecoverAiProperties props;
-  private final SecretKey key;
+  private SecretKey key;
+  @org.springframework.beans.factory.annotation.Value("${recoverai.jwt.signing-key:}")
+  private String signingKey = "";
+
+  @jakarta.annotation.PostConstruct
+  void initializeSigningKey() {
+    if (!signingKey.isBlank()) key = deriveKey(signingKey);
+  }
 
   public JwtService(RecoverAiProperties props) {
     this.props = props;

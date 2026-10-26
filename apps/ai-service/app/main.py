@@ -8,6 +8,8 @@ deterministic fallback engine. Prometheus metrics expose ai_request_total/failur
 from __future__ import annotations
 
 import logging
+import secrets
+from functools import lru_cache
 from contextlib import asynccontextmanager
 from datetime import date
 
@@ -56,12 +58,19 @@ METRIC_LATENCY = prometheus_client.Histogram(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    if settings.production_mode and (len(settings.internal_api_key) < 32 or "change_me" in settings.internal_api_key.lower()):
+        raise RuntimeError("Configure a strong INTERNAL_API_KEY before starting production")
     log.info(
         "AI service starting provider=%s configured=%s",
         settings.llm_provider,
         settings.provider_configured,
     )
-    yield
+    provider = _provider()
+    try:
+        yield
+    finally:
+        provider.close()
+        _provider.cache_clear()
 
 
 app = FastAPI(
@@ -76,6 +85,7 @@ app = FastAPI(
 )
 
 
+@lru_cache(maxsize=1)
 def _provider() -> LlmProvider:
     return LlmProvider(get_settings())
 
@@ -95,12 +105,17 @@ def _validate_or_fallback(
     try:
         raw = _provider().complete_json(system_prompt, payload)
         parsed = model.model_validate(raw)
+        if endpoint == "rank":
+            strategies = [entry.strategy for entry in parsed.ranking]
+            expected = {entry["strategy"] for entry in payload["candidates"]}
+            if len(strategies) != len(set(strategies)) or set(strategies) != expected:
+                raise ValueError("Ranking must contain each eligible candidate once")
         METRIC_LATENCY.labels(endpoint=endpoint).observe(time.monotonic() - t0)
         return parsed
     except Exception as exc:
         METRIC_FAILURES.labels(endpoint=endpoint).inc()
         METRIC_FALLBACKS.labels(endpoint=endpoint).inc()
-        log.warning("LLM_FALLBACK endpoint=%s reason=%s", endpoint, exc)
+        log.warning("LLM_FALLBACK endpoint=%s reason=%s", endpoint, type(exc).__name__)
         result = fallback_fn(payload)
         METRIC_LATENCY.labels(endpoint=endpoint).observe(time.monotonic() - t0)
         return result
@@ -133,6 +148,21 @@ def diagnose(req: DiagnosisRequest):
         lambda p: fallback.diagnose(p),
     )
     return result
+
+
+@app.middleware("http")
+async def internal_boundary(request: Request, call_next):
+    key = get_settings().internal_api_key
+    if request.url.path.startswith("/v1/") and key and not secrets.compare_digest(request.headers.get("X-Internal-Api-Key", ""), key):
+        return JSONResponse(status_code=401, content={"code": "UNAUTHENTICATED", "message": "Internal authentication required"})
+    if request.method == "POST":
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 65_536:
+                return JSONResponse(status_code=413, content={"code": "VALIDATION_ERROR", "message": "Request too large"})
+        request._body = bytes(body)
+    return await call_next(request)
 
 
 @app.post("/v1/rank", response_model=RankResponse)

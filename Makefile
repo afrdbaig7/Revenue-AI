@@ -13,8 +13,8 @@ help: ## Show this help
 
 setup: ## One-time setup: copy env template, install deps
 	@cp -n .env.example .env || true
-	@cd $(WEB_DIR) && npm install
-	@cd $(AI_DIR) && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+	@cd $(WEB_DIR) && npm ci
+	@cd $(AI_DIR) && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 	@echo "Setup complete. Edit .env and run: make infra-up && make migrate && make seed"
 
 infra-up: ## Start infrastructure (Postgres, Redis, Redpanda, Temporal, Grafana)
@@ -25,7 +25,7 @@ infra-down: ## Stop infrastructure
 
 dev: ## Run all services locally (needs infra-up first)
 	@echo "Starting API on :8080, AI service on :8100, Web on :3000"
-	@cd $(API_DIR) && mvn -q spring-boot:run -Dspring-boot.run.profiles=local &
+	@$(MAKE) -j3 api ai web
 
 api: ## Run the Spring Boot API only
 	cd $(API_DIR) && mvn spring-boot:run -Dspring-boot.run.profiles=local
@@ -37,10 +37,10 @@ web: ## Run the Next.js dashboard only
 	cd $(WEB_DIR) && npm run dev
 
 migrate: ## Apply Flyway migrations
-	cd $(API_DIR) && mvn -q flyway:migrate
+	cd $(API_DIR) && mvn -q spring-boot:run "-Dspring-boot.run.arguments=--recoverai.cli.migrate=true --server.port=0 --recoverai.worker-enabled=false"
 
 seed: ## Seed demo data (demo merchant, incidents, metrics)
-	cd $(API_DIR) && mvn -q exec:java -Dexec.mainClass=com.recoverai.tools.SeederMain -Dexec.args="seed"
+	cd $(API_DIR) && mvn -q spring-boot:run "-Dspring-boot.run.arguments=--recoverai.cli.seed=true --server.port=0 --recoverai.worker-enabled=false"
 
 seed-reset: ## Drop + recreate schema, then seed
 	cd $(API_DIR) && mvn -q flyway:clean flyway:migrate

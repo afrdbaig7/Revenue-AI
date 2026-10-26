@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -36,6 +37,7 @@ public class CheckoutEventController {
   private final ObjectMapper mapper;
 
   @PostMapping
+  @PreAuthorize("hasAnyRole('OWNER','ADMIN','OPERATOR')")
   @Transactional
   public Map<String, Object> emit(Authentication authentication, @Valid @RequestBody CheckoutEventRequest req) {
     CurrentUser user = (CurrentUser) authentication.getPrincipal();
@@ -62,7 +64,6 @@ public class CheckoutEventController {
     ObjectNode payload = mapper.createObjectNode();
     payload.set("payload", mapper.createObjectNode().set("checkout_session", session));
     outbox.enqueue(user.orgId(), "checkout", req.sessionId(), "checkout-events:" + eventType, payload);
-    dispatcher.dispatch(user.orgId(), "checkout-events:" + eventType, payload);
     return Map.of("accepted", true, "eventType", eventType);
   }
 

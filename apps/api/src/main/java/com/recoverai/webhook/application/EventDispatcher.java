@@ -49,6 +49,9 @@ public class EventDispatcher implements EventHandlerRegistry {
   private final RecoveryOrchestrator orchestrator;
   private final PolicySetRepository policySets;
   private final AuditService audit;
+  private final com.recoverai.recovery.infrastructure.RecoveryActionRepository actions;
+  private final com.recoverai.analytics.application.SettlementLedger ledger;
+  private final org.springframework.beans.factory.ObjectProvider<com.recoverai.workflow.application.TemporalWorkflowLauncher> workflowLauncher;
 
   @Override
   @Transactional
@@ -56,8 +59,31 @@ public class EventDispatcher implements EventHandlerRegistry {
     String type = eventType.substring(eventType.indexOf(':') + 1);
     JsonNode eventPayload = payload.path("payload");
     switch (type) {
+      case "recovery.start" -> {
+        var launcher = workflowLauncher.getIfAvailable();
+        if (launcher == null) throw new IllegalStateException("Temporal is disabled; retain workflow start for replay");
+        launcher.startRecovery(orgId, UUID.fromString(payload.path("actionId").asText()));
+      }
+      case "promise.start" -> {
+        var launcher = workflowLauncher.getIfAvailable();
+        if (launcher == null) throw new IllegalStateException("Temporal is disabled; retain workflow start for replay");
+        launcher.startPromise(orgId, UUID.fromString(payload.path("promiseId").asText()));
+      }
       case "payment.failed", "payment.authorized", "payment.captured", "payment.pending",
            "payment.refunded", "order.paid" -> handlePaymentEvent(orgId, eventPayload, type);
+      case "payment_link.paid" -> {
+        handlePaymentEvent(orgId, eventPayload, type);
+        var link = eventPayload.path("payment_link");
+        var paymentNode = eventPayload.path("payment");
+        var action = actions.findFirstByOrgIdAndProviderReference(orgId, link.path("id").asText());
+        var captured = payments.findByOrgIdAndProviderAndProviderPaymentId(orgId, "razorpay", paymentNode.path("id").asText());
+        if (action.isPresent() && captured.isPresent()) orchestrator.onReplacementCaptured(orgId, action.get().getIncidentId(), captured.get());
+      }
+      case "refund.processed" -> {
+        var refund = eventPayload.path("refund");
+        payments.findByOrgIdAndProviderAndProviderPaymentId(orgId, "razorpay", refund.path("payment_id").asText())
+            .ifPresent(payment -> ledger.refundEvent(orgId, payment.getId(), refund.path("id").asText(), refund.path("amount").asLong()));
+      }
       case "subscription.charged.failed", "subscription.charged", "subscription.halted",
            "subscription.resumed", "subscription.activated", "subscription.completed" ->
           handleSubscriptionEvent(orgId, eventPayload, type);
@@ -80,6 +106,13 @@ public class EventDispatcher implements EventHandlerRegistry {
     UUID merchantId = resolveMerchantId(orgId, paymentNode);
     UUID customerId = resolveCustomerId(orgId, merchantId, paymentNode);
     Payment payment = paymentService.upsertFromWebhook(orgId, merchantId, customerId, paymentNode);
+    if (payment.getStatus() == PaymentStatus.REFUNDED || payment.getStatus() == PaymentStatus.PARTIALLY_REFUNDED) {
+      ledger.refund(orgId, payment.getId(), paymentNode.path("amount_refunded").asLong(payment.getAmountMinor()));
+    }
+    if (payment.getStatus() == PaymentStatus.CAPTURED && payment.getProviderOrderId() != null) {
+      actions.findFirstByOrgIdAndProviderReference(orgId, payment.getProviderOrderId())
+          .ifPresent(action -> orchestrator.onReplacementCaptured(orgId, action.getIncidentId(), payment));
+    }
 
     if (payment.getStatus() == PaymentStatus.FAILED) {
       maybeCreateIncident(orgId, merchantId, customerId, payment, null, "PAYMENT_FAILURE");
@@ -104,7 +137,7 @@ public class EventDispatcher implements EventHandlerRegistry {
     }
     UUID merchantId = resolveMerchantId(orgId, subscriptionNode);
     UUID customerId = resolveCustomerId(orgId, merchantId, subscriptionNode);
-    Subscription subscription = subscriptions.findByProviderSubscriptionId(providerSubId).orElse(null);
+    Subscription subscription = subscriptions.findByOrgIdAndProviderSubscriptionId(orgId, providerSubId).orElse(null);
 
     if ("subscription.charged.failed".equals(eventType)) {
       JsonNode paymentNode = eventPayload.path("payment");
@@ -153,7 +186,7 @@ public class EventDispatcher implements EventHandlerRegistry {
     }
     UUID merchantId = resolveMerchantId(orgId, sessionNode);
     UUID customerId = resolveCustomerId(orgId, merchantId, sessionNode);
-    CheckoutSession session = checkouts.findByProviderSessionId(providerSessionId).orElse(null);
+    CheckoutSession session = checkouts.findByOrgIdAndProviderSessionId(orgId, providerSessionId).orElse(null);
     if (session == null) {
       session = new CheckoutSession();
       session.setOrgId(orgId);
@@ -237,9 +270,10 @@ public class EventDispatcher implements EventHandlerRegistry {
     if (notesMerchant != null) {
       try {
         UUID id = UUID.fromString(notesMerchant);
-        if (merchants.existsById(id)) {
+        if (merchants.findById(id).filter(m -> m.getOrgId().equals(orgId)).isPresent()) {
           return id;
         }
+        throw ApiException.notFound("Merchant not found");
       } catch (IllegalArgumentException ignored) {
         // fall through
       }

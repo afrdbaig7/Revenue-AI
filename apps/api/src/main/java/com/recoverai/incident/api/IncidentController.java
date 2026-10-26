@@ -43,6 +43,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -72,6 +73,7 @@ public class IncidentController {
   private final PolicySetRepository policySets;
   private final PromiseService promiseService;
   private final ObjectMapper mapper;
+  private final com.recoverai.analytics.application.SettlementLedger ledger;
 
   @GetMapping
   public PageResponse<Map<String, Object>> list(
@@ -82,8 +84,30 @@ public class IncidentController {
       @RequestParam(required = false) String failureCategory,
       @RequestParam(required = false) String strategy,
       @RequestParam(required = false) Long minAmountMinor,
-      @RequestParam(required = false) Long maxAmountMinor) {
+      @RequestParam(required = false) Long maxAmountMinor,
+      @RequestParam(required = false) java.time.Instant createdFrom,
+      @RequestParam(required = false) java.time.Instant createdBefore,
+      @RequestParam(defaultValue = "newest") String sort) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
+    if (page < 0 || size < 1 || (minAmountMinor != null && minAmountMinor < 0)
+        || (maxAmountMinor != null && maxAmountMinor < 0)
+        || (minAmountMinor != null && maxAmountMinor != null && minAmountMinor > maxAmountMinor)) {
+      throw ApiException.badRequest("Invalid pagination or amount range");
+    }
+    if (createdFrom != null && createdBefore != null && !createdFrom.isBefore(createdBefore)) {
+      throw ApiException.badRequest("Start date must precede end date");
+    }
+    Sort ordering = switch (sort) {
+      case "newest" -> Sort.by(Sort.Direction.DESC, "createdAt");
+      case "oldest" -> Sort.by(Sort.Direction.ASC, "createdAt");
+      case "amount_desc" -> Sort.by(Sort.Direction.DESC, "amountMinor");
+      case "amount_asc" -> Sort.by(Sort.Direction.ASC, "amountMinor");
+      default -> throw ApiException.badRequest("Unknown incident sort order");
+    };
+    if (status != null && !status.isBlank()) {
+      try { IncidentStatus.valueOf(status); }
+      catch (IllegalArgumentException e) { throw ApiException.badRequest("Unknown incident status"); }
+    }
     Specification<RevenueIncident> spec = (root, query, cb) -> {
       var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
       predicates.add(cb.equal(root.get("orgId"), orgId));
@@ -102,10 +126,12 @@ public class IncidentController {
       if (maxAmountMinor != null) {
         predicates.add(cb.lessThanOrEqualTo(root.get("amountMinor"), maxAmountMinor));
       }
+      if (createdFrom != null) predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), createdFrom));
+      if (createdBefore != null) predicates.add(cb.lessThan(root.get("createdAt"), createdBefore));
       return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
     };
     Page<RevenueIncident> result =
-        incidents.findAll(spec, PageRequest.of(page, Math.min(size, 100), Sort.by(Sort.Direction.DESC, "createdAt")));
+        incidents.findAll(spec, PageRequest.of(page, Math.min(size, 100), ordering.and(Sort.by("id"))));
     return PageResponse.of(
         result.getContent().stream().map(this::toListRow).toList(),
         page,
@@ -119,19 +145,20 @@ public class IncidentController {
     RevenueIncident incident = incidentService.get(user.orgId(), id);
     Map<String, Object> body = new HashMap<>();
     body.put("incident", toDetail(incident));
-    body.put("payment", incident.getPaymentId() == null ? null : payments.findById(incident.getPaymentId()).orElse(null));
+    body.put("payment", incident.getPaymentId() == null ? null : payments.findByOrgIdAndId(user.orgId(), incident.getPaymentId()).orElse(null));
     body.put("diagnoses", diagnoses.findByOrgIdAndIncidentIdOrderByCreatedAtDesc(user.orgId(), id));
     body.put("decision", decisions.findByIncidentId(id).orElse(null));
     body.put("actions", actions.findByIncidentIdOrderByCreatedAtAsc(id));
     body.put("attempts", attempts.findByIncidentIdOrderByOccurredAtAsc(id));
     body.put("communications", communications.findByIncidentIdOrderByCreatedAtAsc(id));
-    body.put("promises", promises.findByOrgIdAndStatusIn(user.orgId(), List.of(PromiseToPay.Status.values())));
+    body.put("promises", promises.findByOrgIdAndIncidentId(user.orgId(), id));
     body.put("approvals", approvals.findByIncidentIdAndStatus(id, Approval.Status.PENDING));
     return body;
   }
 
   /** Re-drive the recovery pipeline for an incident (operator/admin). */
   @PostMapping("/{id}/reprocess")
+  @PreAuthorize("hasAnyRole('OWNER','ADMIN','OPERATOR')")
   public Map<String, String> reprocess(Authentication authentication, @PathVariable UUID id) {
     CurrentUser user = (CurrentUser) authentication.getPrincipal();
     orchestrator.runPipeline(user.orgId(), id);
@@ -139,7 +166,8 @@ public class IncidentController {
   }
 
   @PostMapping("/{id}/cancel")
-  public Map<String, String> cancel(Authentication authentication, @PathVariable UUID id, @RequestBody(required = false) CancelRequest req) {
+  @PreAuthorize("hasAnyRole('OWNER','ADMIN','OPERATOR')")
+  public Map<String, String> cancel(Authentication authentication, @PathVariable UUID id, @Valid @RequestBody(required = false) CancelRequest req) {
     CurrentUser user = (CurrentUser) authentication.getPrincipal();
     RevenueIncident incident = incidentService.get(user.orgId(), id);
     if (!incident.getStatus().isTerminal()) {
@@ -151,6 +179,7 @@ public class IncidentController {
 
   /** Promise-to-pay from natural language ("Salary comes Monday"). */
   @PostMapping("/{id}/promise")
+  @PreAuthorize("hasAnyRole('OWNER','ADMIN','OPERATOR')")
   public Map<String, Object> promise(
       Authentication authentication, @PathVariable UUID id, @Valid @RequestBody PromiseRequest req) {
     CurrentUser user = (CurrentUser) authentication.getPrincipal();
@@ -158,7 +187,9 @@ public class IncidentController {
     if (incident.getCustomerId() == null) {
       throw ApiException.badRequest("Incident has no customer to attach the promise to");
     }
-    PromiseService.PromiseIntent intent = promiseService.extract(req.text(), ZoneId.of("Asia/Kolkata"));
+    PromiseService.PromiseIntent intent = req.promisedAt() == null
+        ? promiseService.extract(req.text(), ZoneId.of("Asia/Kolkata"))
+        : new PromiseService.PromiseIntent(req.promisedAt(), "operator confirmed", req.channel() == null ? "WHATSAPP" : req.channel(), 0, 1.0);
     PromiseToPay promise = promiseService.create(
         user.orgId(), id, incident.getCustomerId(), req.amountMinor() == null ? incident.getAmountMinor() : req.amountMinor(),
         incident.getCurrency(), intent);
@@ -198,6 +229,7 @@ public class IncidentController {
     row.put("cancellationReason", i.getCancellationReason());
     row.put("policyResult", i.getPolicyResult());
     row.put("netRecoveredMinor", i.getNetRecoveredMinor());
+    row.put("confirmedRecoveredMinor", ledger.recoveredForIncident(i.getOrgId(), i.getId()));
     row.put("interventionCostMinor", i.getInterventionCostMinor());
     row.put("evidenceSummary", i.getEvidenceSummary());
     row.put("paymentId", i.getPaymentId());
@@ -206,7 +238,10 @@ public class IncidentController {
     return row;
   }
 
-  public record CancelRequest(String reason) {}
+  public record CancelRequest(@NotBlank @jakarta.validation.constraints.Size(max = 500) String reason) {}
 
-  public record PromiseRequest(@NotBlank String text, Long amountMinor) {}
+  public record PromiseRequest(@NotBlank @jakarta.validation.constraints.Size(max = 2000) String text,
+      @jakarta.validation.constraints.Positive Long amountMinor,
+      @jakarta.validation.constraints.Future java.time.Instant promisedAt,
+      @jakarta.validation.constraints.Pattern(regexp = "EMAIL|SMS|WHATSAPP") String channel) {}
 }

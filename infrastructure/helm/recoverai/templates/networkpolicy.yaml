@@ -1,0 +1,55 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "recoverai.fullname" . }}-ai-ingress
+spec:
+  podSelector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-ai }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: {{ include "recoverai.fullname" . }}-api }
+        - podSelector:
+            matchLabels: { app: {{ include "recoverai.fullname" . }}-worker }
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports: [{ protocol: TCP, port: 8100 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "recoverai.fullname" . }}-api-ingress
+spec:
+  podSelector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-api }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: {{ include "recoverai.fullname" . }}-web }
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace | quote }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports: [{ protocol: TCP, port: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "recoverai.fullname" . }}-worker-ingress
+spec:
+  podSelector:
+    matchLabels: { app: {{ include "recoverai.fullname" . }}-worker }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports: [{ protocol: TCP, port: 8080 }]
+{{- end }}

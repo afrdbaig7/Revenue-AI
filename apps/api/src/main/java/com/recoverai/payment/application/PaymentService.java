@@ -37,14 +37,17 @@ public class PaymentService {
   private final PaymentProvider provider;
   private final ObjectMapper mapper;
   private final AuditService audit;
+  private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
   /** Upsert a payment from a normalized webhook payload (Razorpay payment entity). */
   @Transactional
   public Payment upsertFromWebhook(UUID orgId, UUID merchantId, UUID customerId, JsonNode paymentNode) {
     String providerPaymentId = paymentNode.path("id").asText();
+    if (providerPaymentId.isBlank()) throw ApiException.badRequest("Missing provider payment id");
+    jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (rs, row) -> 0, orgId + ":" + providerPaymentId);
     Payment payment = providerPaymentId.isBlank()
         ? null
-        : payments.findByProviderAndProviderPaymentId("razorpay", providerPaymentId).orElse(null);
+        : payments.findByOrgIdAndProviderAndProviderPaymentId(orgId, "razorpay", providerPaymentId).orElse(null);
 
     boolean isNew = payment == null;
     if (isNew) {
@@ -66,6 +69,8 @@ public class PaymentService {
     PaymentStatus newStatus = mapStatus(paymentNode.path("status").asText());
     PaymentStatus previousStatus = payment.getStatus();
     applyTransition(payment, newStatus);
+    if (!isNew && payment.getStatus() == previousStatus && newStatus != previousStatus) return payment;
+    newStatus = payment.getStatus();
 
     if (!isNew) {
       payment.setAmountMinor(paymentNode.path("amount").asLong(payment.getAmountMinor()));
@@ -90,9 +95,8 @@ public class PaymentService {
     payment.setProviderFailureDetails(paymentNode);
     payment.setUpdatedAt(Instant.now());
 
-    try {
       Payment saved = payments.saveAndFlush(payment);
-      recordAttempt(saved, paymentNode);
+      if (isNew) recordAttempt(saved, paymentNode);
       audit.record(
           "PAYMENT_RECONCILED",
           "payment",
@@ -103,23 +107,22 @@ public class PaymentService {
           audit.json(java.util.Map.of(
               "providerPaymentId", providerPaymentId,
               "status", newStatus.name(),
-              "failureCategory", payment.getFailureCategory() == null ? null : payment.getFailureCategory().name())),
+              "failureCategory", payment.getFailureCategory() == null ? "NONE" : payment.getFailureCategory().name())),
           null);
       return saved;
-    } catch (DataIntegrityViolationException e) {
-      // concurrent duplicate webhook — re-read and return existing
-      return payments.findByProviderAndProviderPaymentId("razorpay", providerPaymentId).orElse(payment);
-    }
   }
 
   /** Reconcile with the provider (fetch current state) before any recovery execution. */
   @Transactional
-  public Payment reconcileFromProvider(UUID orgId, Payment payment) {
+  public Reconciliation reconcileFromProvider(UUID orgId, Payment payment) {
+    if (!payment.getOrgId().equals(orgId)) throw ApiException.notFound("Payment not found");
     if (payment.getProviderPaymentId() == null || payment.getProviderPaymentId().isBlank()) {
-      return payment; // nothing to reconcile (e.g. checkout-only incidents)
+      return new Reconciliation(payment, false, "MISSING_PROVIDER_REFERENCE");
     }
     try {
       ProviderPayment fetched = provider.fetchPayment(payment.getProviderPaymentId());
+      if (!payment.getProviderPaymentId().equals(fetched.id()) || fetched.amountMinor() != payment.getAmountMinor()
+          || !payment.getCurrency().equals(fetched.currency())) return new Reconciliation(payment, false, "INVALID_PROVIDER_SNAPSHOT");
       PaymentStatus newStatus = mapStatus(fetched.status());
       applyTransition(payment, newStatus);
       if (fetched.errorCode() != null) {
@@ -130,19 +133,21 @@ public class PaymentService {
         payment.setCapturedAt(fetched.capturedAt());
       }
       payment.setUpdatedAt(Instant.now());
-      return payments.save(payment);
+      return new Reconciliation(payments.save(payment), true, "VERIFIED");
     } catch (PaymentProvider.ProviderException e) {
-      log.warn("RECONCILE_FAILED payment={} category={} error={}", payment.getId(), e.category(), e.getMessage());
-      return payment;
+      log.warn("RECONCILE_FAILED payment={} category={}", payment.getId(), e.category());
+      return new Reconciliation(payment, false, e.category());
     }
   }
+
+  public record Reconciliation(Payment payment, boolean verified, String reason) {}
 
   private void applyTransition(Payment payment, PaymentStatus newStatus) {
     if (payment.getStatus() == newStatus) {
       return;
     }
     PaymentStatus previous = payment.getStatus();
-    PaymentStateMachine.transition(previous, newStatus);
+    newStatus = PaymentStateMachine.observe(previous, newStatus);
     payment.setStatus(newStatus);
     if (PaymentStateMachine.isLateAuthorization(previous, newStatus)) {
       log.info("LATE_AUTHORIZATION payment={} {} -> {}", payment.getId(), previous, newStatus);
@@ -180,7 +185,8 @@ public class PaymentService {
       case "refunded" -> PaymentStatus.REFUNDED;
       case "partially_refunded" -> PaymentStatus.PARTIALLY_REFUNDED;
       case "pending" -> PaymentStatus.PENDING;
-      default -> PaymentStatus.CREATED;
+      case "created" -> PaymentStatus.CREATED;
+      default -> throw ApiException.badRequest("Unknown provider payment status");
     };
   }
 

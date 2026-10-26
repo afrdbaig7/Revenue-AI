@@ -98,10 +98,8 @@ public class AuthController {
   /** Exposes the CSRF token to the browser (cookie is set by the CSRF filter). */
   @GetMapping("/csrf")
   public AuthDtos.CsrfResponse csrf(HttpServletRequest request) {
-    Cookie cookie = request.getCookies() == null
-        ? null
-        : Arrays.stream(request.getCookies()).filter(c -> c.getName().equals(CSRF_COOKIE)).findFirst().orElse(null);
-    return new AuthDtos.CsrfResponse(cookie == null ? "" : cookie.getValue());
+    var token = (org.springframework.security.web.csrf.CsrfToken) request.getAttribute(org.springframework.security.web.csrf.CsrfToken.class.getName());
+    return new AuthDtos.CsrfResponse(token == null ? "" : token.getToken());
   }
 
   private void setAuthCookies(HttpServletResponse response, String access, String refresh, long ttlSeconds) {
@@ -141,9 +139,9 @@ public class AuthController {
   public static List<String> permissionsFor(String role) {
     return switch (role) {
       case "OWNER" -> List.of("*");
-      case "ADMIN" -> List.of("integrations:write", "policies:write", "users:write", "recovery:manage", "recovery:approve");
-      case "OPERATOR" -> List.of("recovery:manage", "recovery:approve", "recovery:escalate");
-      case "ANALYST" -> List.of("analytics:read", "audit:read", "export");
+      case "ADMIN" -> List.of("analytics:read", "audit:read", "export", "experiments:write", "integrations:write", "policies:write", "users:write", "recovery:manage", "recovery:approve");
+      case "OPERATOR" -> List.of("analytics:read", "audit:read", "recovery:manage", "recovery:approve", "recovery:escalate");
+      case "ANALYST" -> List.of("analytics:read", "audit:read", "export", "experiments:write");
       default -> List.of("analytics:read");
     };
   }

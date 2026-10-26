@@ -198,7 +198,7 @@ def test_fallback_rank_orders_by_ev():
             ]
         }
     )
-    assert [r["strategy"] for r in ranked.ranking] == [
+    assert [r.strategy for r in ranked.ranking] == [
         "PAYMENT_LINK", "DELAYED_RETRY", "NO_ACTION"
     ]
 

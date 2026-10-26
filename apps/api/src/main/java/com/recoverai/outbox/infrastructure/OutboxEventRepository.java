@@ -17,6 +17,16 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
 
   org.springframework.data.domain.Page<OutboxEvent> findByStatus(String status, org.springframework.data.domain.Pageable pageable);
 
+  org.springframework.data.domain.Page<OutboxEvent> findByOrgIdAndStatus(UUID orgId, String status, org.springframework.data.domain.Pageable pageable);
+
+  java.util.Optional<OutboxEvent> findByOrgIdAndId(UUID orgId, UUID id);
+
+  long countByOrgIdAndStatus(UUID orgId, String status);
+
+  @Modifying
+  @Query("update OutboxEvent e set e.status = 'PENDING', e.nextAttemptAt = :now, e.attempts = 0, e.lastError = null where e.orgId = :orgId and e.id = :id and e.status = 'DEAD'")
+  int resetForTenantReplay(@Param("orgId") UUID orgId, @Param("id") UUID id, @Param("now") Instant now);
+
   /** Replay: DEAD → PENDING with attempt counter reset. Returns rows updated. */
   @Modifying
   @Query(
@@ -31,7 +41,7 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
   @Modifying
   @Query(
       "update OutboxEvent e set e.attempts = e.attempts + 1, e.lastError = :error, "
-          + "e.nextAttemptAt = :retryAt, e.status = case when e.attempts + 1 >= :maxAttempts then 'DEAD' else 'FAILED' end "
+          + "e.nextAttemptAt = :retryAt, e.status = case when e.attempts + 1 >= :maxAttempts then 'DEAD' else 'PENDING' end "
           + "where e.id = :id")
   int markFailed(@Param("id") UUID id, @Param("error") String error, @Param("retryAt") Instant retryAt, @Param("maxAttempts") int maxAttempts);
 }

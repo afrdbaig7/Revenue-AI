@@ -27,4 +27,8 @@ public interface RecoveryActionRepository extends JpaRepository<RecoveryAction, 
 
   @Query("select a from RecoveryAction a where a.status = 'SCHEDULED' and a.scheduledFor <= :now order by a.scheduledFor asc")
   List<RecoveryAction> findDue(@Param("now") Instant now, Pageable pageable);
+
+  List<RecoveryAction> findByStatusAndLeaseUntilBefore(Status status, Instant now, Pageable pageable);
+
+  Optional<RecoveryAction> findFirstByOrgIdAndProviderReference(UUID orgId, String providerReference);
 }

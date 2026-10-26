@@ -22,9 +22,12 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 
-    llm_timeout_seconds: float = 8.0
+    llm_timeout_seconds: float = 6.0
     llm_max_retries: int = 2
     llm_temperature: float = 0.1
+    max_concurrent_requests: int = 8
+    internal_api_key: str = ""
+    production_mode: bool = False
     circuit_breaker_failures: int = 5
     circuit_breaker_cooldown_seconds: float = 30.0
 

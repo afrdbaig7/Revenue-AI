@@ -17,6 +17,12 @@ import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 public class BearerAwareCsrfHandler extends CsrfTokenRequestAttributeHandler {
 
   @Override
+  public void handle(HttpServletRequest request, HttpServletResponse response, java.util.function.Supplier<CsrfToken> token) {
+    super.handle(request, response, token);
+    token.get(); // Materialize the deferred cookie for SPA bootstrap and post-login mutations.
+  }
+
+  @Override
   public String resolveCsrfTokenValue(HttpServletRequest request, CsrfToken csrfToken) {
     String auth = request.getHeader("Authorization");
     if (auth != null && auth.startsWith("Bearer ")) {

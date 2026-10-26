@@ -68,11 +68,12 @@ public interface RevenueIncidentRepository
   long sumLateAuthorized(@Param("orgId") UUID orgId);
 
   @Query(
-      "select i.selectedStrategy as strategy, count(i) as uses, "
-          + "coalesce(sum(case when i.status = 'RECOVERED' then 1 else 0 end), 0) as successes, "
-          + "coalesce(sum(i.recoveredAmountMinor), 0) as recoveredMinor "
-          + "from RevenueIncident i where i.orgId = :orgId and i.selectedStrategy is not null "
-          + "group by i.selectedStrategy order by uses desc")
+      value = "select i.selected_strategy as strategy, count(i.id) as uses, "
+          + "count(s.id) filter (where s.amount_minor > s.refunded_minor) as successes, "
+          + "coalesce(sum(s.amount_minor - s.refunded_minor), 0) as recovered_minor "
+          + "from revenue_incidents i left join recovery_settlements s on s.org_id = i.org_id and s.incident_id = i.id "
+          + "where i.org_id = :orgId and i.selected_strategy is not null group by i.selected_strategy order by uses desc",
+      nativeQuery = true)
   List<Object[]> strategyStats(@Param("orgId") UUID orgId);
 
   @Query(

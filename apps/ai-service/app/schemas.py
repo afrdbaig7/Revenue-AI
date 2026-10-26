@@ -7,6 +7,7 @@ is returned instead. These schemas are the contract with the platform.
 from __future__ import annotations
 
 from typing import Literal, Optional
+from datetime import date
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -64,12 +65,40 @@ class DiagnosisResponse(BaseModel):
     promptVersion: str = "unknown"
 
 
+Strategy = Literal["NO_ACTION", "PAYMENT_LINK", "UPI_RECOVERY", "DELAYED_RETRY", "EMAIL_NUDGE", "WHATSAPP_NUDGE", "SMS_NUDGE", "BOUNDED_DISCOUNT", "ALTERNATE_PAYMENT_METHOD", "WAIT_FOR_PROVIDER_RETRY", "PROMISE_TO_PAY", "MANUAL_ESCALATION"]
+
+
+class Candidate(BaseModel):
+    strategy: Strategy
+    expectedValueMinor: int = Field(ge=0, default=0)
+    probability: float = Field(ge=0, le=1, default=0)
+    expectedGrossMinor: int = Field(ge=0, default=0)
+    interventionCostMinor: int = Field(ge=0, default=0)
+    discountCostMinor: int = Field(ge=0, default=0)
+    riskPenaltyMinor: int = Field(ge=0, default=0)
+    frictionPenaltyMinor: int = Field(ge=0, default=0)
+    timeToRecoveryHours: float = Field(ge=0, le=720, default=0)
+    rationale: str = Field(max_length=500, default="")
+
+
+class RankedStrategy(BaseModel):
+    strategy: Strategy
+    rank: int = Field(ge=1, le=16)
+
+
 class RankRequest(BaseModel):
-    candidates: list[dict] = Field(max_length=16)
+    candidates: list[Candidate] = Field(min_length=1, max_length=16)
+
+    @field_validator("candidates")
+    @classmethod
+    def unique_candidates(cls, value):
+        if len({item.strategy for item in value}) != len(value):
+            raise ValueError("Duplicate candidate")
+        return value
 
 
 class RankResponse(BaseModel):
-    ranking: list[dict] = Field(max_length=16)
+    ranking: list[RankedStrategy] = Field(min_length=1, max_length=16)
     explanation: Optional[str] = Field(default=None, max_length=500)
 
 
@@ -88,12 +117,22 @@ class PromiseExtractRequest(BaseModel):
     text: str = Field(min_length=2, max_length=300)
 
 
+class PreferredTime(BaseModel):
+    hour: int = Field(ge=0, le=23, default=18)
+    minute: int = Field(ge=0, le=59, default=30)
+
+
 class PromiseExtractResponse(BaseModel):
-    promisedDate: str  # ISO yyyy-MM-dd
+    promisedDate: str
     preferredTimeText: str = Field(default="evening", max_length=16)
-    preferredTime: dict = Field(default_factory=lambda: {"hour": 18, "minute": 30})
-    channel: str = Field(default="WHATSAPP", max_length=16)
+    preferredTime: PreferredTime = Field(default_factory=PreferredTime)
+    channel: Literal["EMAIL", "SMS", "WHATSAPP", "DEMO_INBOX"] = "WHATSAPP"
     confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("promisedDate")
+    @classmethod
+    def valid_date(cls, value: str) -> str:
+        return date.fromisoformat(value).isoformat()
 
 
 class HinglishRequest(BaseModel):

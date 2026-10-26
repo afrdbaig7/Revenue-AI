@@ -37,6 +37,7 @@ public class DashboardService {
       IncidentStatus.AWAITING_APPROVAL,
       IncidentStatus.SCHEDULED,
       IncidentStatus.EXECUTING,
+      IncidentStatus.AWAITING_PAYMENT,
       IncidentStatus.RETRYABLE_FAILURE,
       IncidentStatus.ESCALATED);
 
@@ -44,11 +45,16 @@ public class DashboardService {
   private final MetricSnapshotRepository snapshots;
   private final OrganizationRepository organizations;
   private final ObjectMapper mapper;
+  private final SettlementLedger ledger;
+  private final com.recoverai.common.config.RecoverAiProperties props;
+  private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+  @org.springframework.beans.factory.annotation.Value("${recoverai.worker-enabled:true}")
+  private boolean workerEnabled = true;
 
   public record Summary(
       long revenueAtRiskMinor,
       long revenueRecoveredMinor,
-      long incrementalRevenueMinor,
+      Long incrementalRevenueMinor,
       double recoveryRate,
       long activeIncidents,
       long unresolvedIncidents,
@@ -56,19 +62,42 @@ public class DashboardService {
       long attemptsTotal,
       long policyBlocks,
       long lateAuthorizationPrevented,
-      boolean synthetic) {}
+      boolean synthetic,
+      String currency,
+      String rateDefinition,
+      Instant asOf) {}
 
+  @Transactional
   public Summary summary(UUID orgId) {
+    jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (rs, row) -> 0, "summary:" + orgId);
+    Instant hour = Instant.now().truncatedTo(ChronoUnit.HOURS);
+    var existing = snapshots.findByOrgIdAndPeriodStart(orgId, hour);
+    if (existing.isPresent() && existing.get().getMetrics().hasNonNull("summary")) {
+      Summary cached = mapper.convertValue(existing.get().getMetrics().path("summary"), Summary.class);
+      if (cached.asOf() != null && cached.asOf().isAfter(Instant.now().minusSeconds(300))) return cached;
+    }
+    Summary result = computeSummary(orgId);
+    ObjectNode metrics = mapper.createObjectNode();
+    metrics.put("revenueAtRiskMinor", result.revenueAtRiskMinor());
+    metrics.put("revenueRecoveredMinor", result.revenueRecoveredMinor());
+    metrics.put("recoveredCount", result.recoveredIncidents());
+    metrics.set("summary", mapper.valueToTree(result));
+    jdbc.update("""
+        INSERT INTO metric_snapshots(org_id, period_start, period_end, metrics)
+        VALUES (?, ?, ?, CAST(? AS jsonb)) ON CONFLICT(org_id, period_start) DO UPDATE SET metrics = excluded.metrics
+        """, orgId, java.sql.Timestamp.from(hour), java.sql.Timestamp.from(hour.plus(1, ChronoUnit.HOURS)), metrics.toString());
+    return result;
+  }
+
+  private Summary computeSummary(UUID orgId) {
     long atRisk = incidents.sumAtRisk(orgId, OPEN_STATUSES);
-    long recovered = incidents.sumRecovered(orgId);
-    long recoveredCount = incidents.countByOrgIdAndStatus(orgId, IncidentStatus.RECOVERED)
-        + incidents.countByOrgIdAndStatus(orgId, IncidentStatus.CLOSED);
+    long recovered = ledger.recovered(orgId);
+    long recoveredCount = ledger.recoveredIncidents(orgId);
     long total = incidents.countByOrgId(orgId);
     long unresolved = total - recoveredCount;
-    // Incremental vs the fixed baseline measured by the seeded experiment (synthetic).
-    long incremental = Math.round(recovered * 0.3985); // 39.85% uplift from seeded sim
-    // Recovery rate = recovered ÷ revenue at risk (industry-standard formulation).
-    double rate = atRisk > 0 ? (double) recovered / atRisk : 0;
+    Long incremental = null; // Only a named experiment can establish incremental uplift.
+    // Incident recovery rate uses the same all-time incident cohort in both terms.
+    double rate = total > 0 ? (double) recoveredCount / total : 0;
     return new Summary(
         atRisk,
         recovered,
@@ -80,10 +109,12 @@ public class DashboardService {
         incidents.sumAttempts(orgId),
         incidents.sumPolicyBlocks(orgId),
         incidents.sumLateAuthorized(orgId),
-        true);
+        props.demoMode() || props.razorpay().mockMode(),
+        "INR", "Confirmed non-refunded recovered incidents / all incidents", Instant.now());
   }
 
   public JsonNode recoveryTrend(UUID orgId, int days) {
+    if (days < 1 || days > 90) throw com.recoverai.common.api.ApiException.badRequest("days must be between 1 and 90");
     List<MetricSnapshot> snaps = snapshots.findByOrgIdOrderByPeriodStartDesc(orgId, PageRequest.of(0, days * 24));
     ArrayNode trend = mapper.createArrayNode();
     for (int i = snaps.size() - 1; i >= 0; i--) {
@@ -125,6 +156,9 @@ public class DashboardService {
   @Scheduled(cron = "${recoverai.scheduling.snapshot-cron:0 0 * * * *}")
   @Transactional
   public void snapshot() {
+    if (!workerEnabled) return;
+    Boolean leader = jdbc.queryForObject("SELECT pg_try_advisory_xact_lock(hashtextextended('recoverai-snapshot', 0))", Boolean.class);
+    if (!Boolean.TRUE.equals(leader)) return;
     Instant now = Instant.now().truncatedTo(ChronoUnit.HOURS);
     for (UUID orgId : organizations.findAll().stream().map(o -> o.getId()).toList()) {
       if (snapshots.findByOrgIdAndPeriodStart(orgId, now).isPresent()) {
@@ -132,8 +166,8 @@ public class DashboardService {
       }
       ObjectNode metrics = mapper.createObjectNode();
       metrics.put("revenueAtRiskMinor", incidents.sumAtRisk(orgId, OPEN_STATUSES));
-      metrics.put("revenueRecoveredMinor", incidents.sumRecovered(orgId));
-      metrics.put("recoveredCount", incidents.countByOrgIdAndStatus(orgId, IncidentStatus.RECOVERED));
+      metrics.put("revenueRecoveredMinor", ledger.recovered(orgId));
+      metrics.put("recoveredCount", ledger.recoveredIncidents(orgId));
       snapshots.save(new MetricSnapshot(orgId, now, now.plus(1, ChronoUnit.HOURS), metrics));
     }
   }

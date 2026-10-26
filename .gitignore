@@ -47,4 +47,6 @@ htmlcov/
 
 # --- Generated reports ---
 reports/
+apps/web/test-results/
+apps/web/playwright-report/
 tmp/

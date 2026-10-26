@@ -1,32 +1,44 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryFailure } from "@/components/QueryFailure";
+
+import { useTenantQuery as useQuery } from "@/lib/queries";
+
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import type { Approval, PageResponse } from "@/lib/types";
 import { formatINR, timeAgo, shortId } from "@/lib/format";
-import { PageHeader, Card, StatusBadge, EmptyState, Button } from "@/components/ui";
+import { PageHeader, Card, StatusBadge, EmptyState, Button, Pagination } from "@/components/ui";
 import { useState } from "react";
 import Link from "next/link";
 
 export default function ApprovalsPage() {
+  const { can } = useAuth();
+  const [page, setPage] = useState(0);
+  const [status, setStatus] = useState("PENDING");
   const queryClient = useQueryClient();
   const [note, setNote] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   const approvals = useQuery({
-    queryKey: ["approvals"],
-    queryFn: () => api.get<PageResponse<Approval>>("/approvals?status=PENDING&size=50"),
+    queryKey: ["approvals", page, status],
+    queryFn: () => api.get<PageResponse<Approval>>(`/approvals?status=${status}&size=25&page=${page}`),
   });
 
   const decide = useMutation({
     mutationFn: ({ id, action }: { id: string; action: "approve" | "reject" }) =>
       api.post(`/approvals/${id}/${action}`, { note: note[id] }),
     onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries();
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
       queryClient.invalidateQueries({ queryKey: ["summary"] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : "Decision failed"),
   });
+
+  if (approvals.isError) return <QueryFailure error={approvals.error} retry={() => { void approvals.refetch(); }} />;
 
   const rows = approvals.data?.items ?? [];
 
@@ -36,6 +48,7 @@ export default function ApprovalsPage() {
         title="Approval Queue"
         subtitle="High-value, discount, and low-confidence recovery proposals need a human decision. Every decision is audited."
       />
+      <div className="mb-4"><label>Status <select aria-label="Approval status" value={status} onChange={(e) => { setStatus(e.target.value); setPage(0); }}>{["PENDING", "APPROVED", "REJECTED", "EXPIRED", "CANCELLED"].map((value) => <option key={value}>{value}</option>)}</select></label></div>
       {error ? <div className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</div> : null}
 
       {approvals.isLoading ? (
@@ -85,10 +98,11 @@ export default function ApprovalsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {a.status === "PENDING" && can("recovery:approve") ? <>
                   <input
                     value={note[a.id] ?? ""}
                     onChange={(e) => setNote((n) => ({ ...n, [a.id]: e.target.value }))}
-                    placeholder="Decision note (optional)"
+                    aria-label="Decision note" placeholder="Decision note (optional)" maxLength={500}
                     className="w-48 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-100"
                   />
                   <Button variant="danger" onClick={() => decide.mutate({ id: a.id, action: "reject" })} disabled={decide.isPending}>
@@ -97,12 +111,14 @@ export default function ApprovalsPage() {
                   <Button onClick={() => decide.mutate({ id: a.id, action: "approve" })} disabled={decide.isPending}>
                     Approve
                   </Button>
+                  </> : <span className="text-xs text-slate-500">{a.decisionNote || (a.status === "PENDING" ? "Read only" : a.status)}</span>}
                 </div>
               </div>
             </Card>
           ))}
         </div>
       )}
+      <Pagination page={page} totalPages={approvals.data?.totalPages ?? 0} onChange={setPage} />
     </div>
   );
 }

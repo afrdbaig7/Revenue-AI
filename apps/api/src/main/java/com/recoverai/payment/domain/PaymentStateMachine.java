@@ -22,7 +22,7 @@ public final class PaymentStateMachine {
       return to;
     }
     boolean valid = switch (from) {
-      case CREATED -> to == PaymentStatus.PENDING || to == PaymentStatus.FAILED || to == PaymentStatus.AUTHORIZED;
+      case CREATED -> to == PaymentStatus.PENDING || to == PaymentStatus.FAILED || to == PaymentStatus.AUTHORIZED || to == PaymentStatus.CAPTURED;
       case PENDING -> to == PaymentStatus.AUTHORIZED || to == PaymentStatus.FAILED || to == PaymentStatus.CAPTURED;
       case AUTHORIZED -> to == PaymentStatus.CAPTURED || to == PaymentStatus.FAILED;
       case CAPTURED -> to == PaymentStatus.REFUNDED || to == PaymentStatus.PARTIALLY_REFUNDED;
@@ -42,5 +42,22 @@ public final class PaymentStateMachine {
   /** True when this transition represents a late authorization after an apparent failure. */
   public static boolean isLateAuthorization(PaymentStatus from, PaymentStatus to) {
     return from == PaymentStatus.FAILED && (to == PaymentStatus.AUTHORIZED || to == PaymentStatus.CAPTURED);
+  }
+
+  /** Provider observations may skip intermediate states, but cannot undo settled state. */
+  public static PaymentStatus observe(PaymentStatus current, PaymentStatus observed) {
+    return rank(observed) >= rank(current) ? observed : current;
+  }
+
+  private static int rank(PaymentStatus status) {
+    return switch (status) {
+      case CREATED -> 0;
+      case PENDING -> 1;
+      case FAILED -> 2;
+      case AUTHORIZED -> 3;
+      case CAPTURED -> 4;
+      case PARTIALLY_REFUNDED -> 5;
+      case REFUNDED -> 6;
+    };
   }
 }

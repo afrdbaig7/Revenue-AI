@@ -41,6 +41,7 @@ public class TemporalConfig {
   }
 
   @Bean
+  @ConditionalOnProperty(prefix = "recoverai", name = "worker-enabled", havingValue = "true", matchIfMissing = true)
   public WorkerFactory workerFactory(WorkflowClient client, RecoveryActivities activities) {
     WorkerFactory factory = WorkerFactory.newInstance(client);
     Worker worker = factory.newWorker(TemporalWorkflowLauncher.TASK_QUEUE);
@@ -50,6 +51,7 @@ public class TemporalConfig {
   }
 
   @Bean
+  @ConditionalOnProperty(prefix = "recoverai", name = "worker-enabled", havingValue = "true", matchIfMissing = true)
   public ApplicationRunner temporalWorkerRunner(WorkerFactory factory) {
     return args -> {
       factory.start();

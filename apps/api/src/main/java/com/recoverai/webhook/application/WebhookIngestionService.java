@@ -33,40 +33,36 @@ public class WebhookIngestionService {
   private final OutboxService outbox;
   private final ObjectMapper mapper;
   private final AuditService audit;
+  private final ProviderEventNormalizer normalizer;
+  private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
   public record IngestResult(boolean duplicate) {}
 
-  @Transactional(noRollbackFor = DataIntegrityViolationException.class)
+  @Transactional
   public IngestResult ingest(
       MerchantIntegration integration, String eventId, String eventType, byte[] rawBody, JsonNode event) {
 
     String payloadHash = sha256(rawBody);
-    JsonNode redacted = redact(event);
+    JsonNode redacted = normalizer.normalize(event, integration.getMerchantId());
 
     // Duplicate delivery — expected and absorbed BEFORE any insert (avoids dirtying the
     // transaction). The unique (provider, provider_event_id) constraint remains as the
     // hard backstop for concurrent duplicates.
-    if (inbox.findByProviderAndProviderEventId("razorpay", eventId).isPresent()) {
-      return new IngestResult(true);
-    }
-
-    try {
-      WebhookInbox row = new WebhookInbox(
-          integration.getOrgId(), "razorpay", eventId, eventType, payloadHash, redacted);
-      inbox.saveAndFlush(row);
+    int inserted = jdbc.update("""
+        INSERT INTO webhook_inbox(id, org_id, provider, provider_event_id, event_type, payload_hash, raw_payload)
+        VALUES (?, ?, 'razorpay', ?, ?, ?, CAST(? AS jsonb))
+        ON CONFLICT (org_id, provider, provider_event_id) DO NOTHING
+        """, java.util.UUID.randomUUID(), integration.getOrgId(), eventId, eventType, payloadHash, redacted.toString());
+    if (inserted == 0) return new IngestResult(true);
 
       String topic = topicFor(eventType);
       ObjectNode outPayload = mapper.createObjectNode();
       outPayload.put("provider", "razorpay");
       outPayload.put("providerEventId", eventId);
       outPayload.put("eventType", eventType);
-      outPayload.set("payload", event.path("payload"));
+      outPayload.set("payload", redacted.path("payload"));
       outbox.enqueue(integration.getOrgId(), "webhook", eventId, topic + ":" + eventType, outPayload);
       return new IngestResult(false);
-    } catch (DataIntegrityViolationException e) {
-      // Concurrent duplicate racing the check — absorbed, treated as duplicate.
-      return new IngestResult(true);
-    }
   }
 
   private String topicFor(String eventType) {

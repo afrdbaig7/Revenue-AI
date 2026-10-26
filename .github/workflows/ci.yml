@@ -78,12 +78,21 @@ jobs:
       - name: Typecheck
         working-directory: apps/web
         run: npm run typecheck
+      - name: Lint
+        working-directory: apps/web
+        run: npm run lint
       - name: Tests
         working-directory: apps/web
         run: npm run test
       - name: Build
         working-directory: apps/web
         run: npm run build
+      - name: Install browser
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Browser session and error journeys
+        working-directory: apps/web
+        run: npm run e2e:ui
 
   docker:
     name: Docker images
@@ -91,6 +100,8 @@ jobs:
     needs: [backend, ai-service, web]
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Helm chart
+        run: docker run --rm -v "$PWD/infrastructure/helm:/charts:ro" alpine/helm:3.16.4 lint /charts/recoverai
       - uses: docker/setup-buildx-action@v3
       - name: Build api image
         uses: docker/build-push-action@v6

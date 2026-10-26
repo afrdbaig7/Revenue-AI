@@ -14,5 +14,9 @@ public interface PromiseToPayRepository extends JpaRepository<PromiseToPay, UUID
 
   Optional<PromiseToPay> findByOrgIdAndId(UUID orgId, UUID id);
 
+  List<PromiseToPay> findByOrgIdAndIncidentId(UUID orgId, UUID incidentId);
+
   List<PromiseToPay> findByStatusInAndPromisedAtBefore(List<Status> statuses, Instant before);
+
+  List<PromiseToPay> findByStatusInAndPromisedAtBefore(List<Status> statuses, Instant before, org.springframework.data.domain.Pageable pageable);
 }

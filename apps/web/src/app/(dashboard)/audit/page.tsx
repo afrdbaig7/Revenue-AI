@@ -1,7 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { QueryFailure } from "@/components/QueryFailure";
+
+import { useTenantQuery as useQuery } from "@/lib/queries";
+import { useUrlFilters } from "@/lib/url-filters";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import type { AuditEvent, PageResponse } from "@/lib/types";
@@ -9,8 +11,10 @@ import { formatDateTime, shortId } from "@/lib/format";
 import { PageHeader, Card, StatusBadge, EmptyState, Pagination, Skeleton } from "@/components/ui";
 
 export default function AuditPage() {
-  const [page, setPage] = useState(0);
-  const [eventType, setEventType] = useState("");
+  const [filters, setFilters] = useUrlFilters({ page: "0", eventType: "" });
+  const page = Math.max(0, Number.parseInt(filters.page, 10) || 0);
+  const eventType = filters.eventType;
+  const setPage = (value: number) => setFilters({ page: String(value) });
 
   const audit = useQuery({
     queryKey: ["audit-all", page, eventType],
@@ -20,6 +24,8 @@ export default function AuditPage() {
       return api.get<PageResponse<AuditEvent>>(`/audit-events?${params}`);
     },
   });
+
+  if (audit.isError) return <QueryFailure error={audit.error} retry={() => { void audit.refetch(); }} />;
 
   const rows = audit.data?.items ?? [];
 
@@ -31,8 +37,8 @@ export default function AuditPage() {
       />
       <input
         value={eventType}
-        onChange={(e) => { setEventType(e.target.value); setPage(0); }}
-        placeholder="Filter by event type (e.g. POLICY_BLOCKED)…"
+        onChange={(e) => setFilters({ eventType: e.target.value, page: "0" })}
+        aria-label="Audit event type" placeholder="Filter by event type (e.g. POLICY_BLOCKED)…"
         className="mb-3 w-72 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-100"
       />
 
@@ -58,7 +64,9 @@ export default function AuditPage() {
                 {rows.map((e) => (
                   <tr key={e.id}>
                     <td className="whitespace-nowrap text-xs text-slate-500">{formatDateTime(e.timestamp)}</td>
-                    <td className="font-medium text-slate-800">{e.eventType.replaceAll("_", " ")}</td>
+                    <td className="font-medium text-slate-800">{e.eventType.replaceAll("_", " ")}
+                      {e.decisionInputSnapshot || e.decisionOutputSnapshot ? <details className="mt-1 text-xs"><summary className="cursor-pointer">View recorded changes</summary><pre className="mt-2 max-h-64 max-w-lg overflow-auto rounded bg-slate-50 p-2 text-[10px]">{JSON.stringify({ before: e.decisionInputSnapshot, after: e.decisionOutputSnapshot }, null, 2)}</pre></details> : null}
+                    </td>
                     <td className="text-xs">
                       {e.entityType}
                       <span className="ml-1 font-mono text-[10px] text-slate-400">{shortId(e.entityId)}</span>

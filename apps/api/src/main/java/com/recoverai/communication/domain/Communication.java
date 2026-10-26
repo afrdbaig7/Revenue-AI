@@ -73,6 +73,9 @@ public class Communication {
   @Column(name = "provider_message_id", length = 120)
   private String providerMessageId;
 
+  @Column(name = "operation_key", length = 190)
+  private String operationKey;
+
   @Column(name = "sent_at")
   private Instant sentAt;
 

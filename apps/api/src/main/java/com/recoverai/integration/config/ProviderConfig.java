@@ -18,9 +18,9 @@ public class ProviderConfig {
   @Bean
   @Primary
   public PaymentProvider paymentProvider(
-      RecoverAiProperties props, RazorpayPaymentProvider razorpay, MockRazorpayProvider mock) {
-    boolean useMock =
-        props.razorpay().mockMode() || props.razorpay().keyId() == null || props.razorpay().keyId().isBlank();
-    return useMock ? mock : razorpay;
+      RecoverAiProperties props, RazorpayPaymentProvider razorpay, MockRazorpayProvider mock,
+      com.recoverai.merchant.infrastructure.MerchantIntegrationRepository integrations,
+      com.recoverai.merchant.application.SecretCipher cipher) {
+    return new TenantPaymentProvider(props, integrations, cipher, razorpay, mock);
   }
 }

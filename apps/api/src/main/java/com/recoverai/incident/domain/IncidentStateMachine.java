@@ -82,6 +82,15 @@ public final class IncidentStateMachine {
     allow(IncidentStatus.EXPIRED, IncidentStatus.CLOSED);
     allow(IncidentStatus.CANCELLED, IncidentStatus.CLOSED);
     allow(IncidentStatus.CLOSED);
+    allow(IncidentStatus.AWAITING_PAYMENT, IncidentStatus.RECOVERED, IncidentStatus.EXPIRED, IncidentStatus.CANCELLED,
+        IncidentStatus.LATE_AUTHORIZED, IncidentStatus.OPTED_OUT, IncidentStatus.BLOCKED, IncidentStatus.ESCALATED);
+    ALLOWED.get(IncidentStatus.EXECUTING).addAll(EnumSet.of(IncidentStatus.AWAITING_PAYMENT, IncidentStatus.EXPIRED, IncidentStatus.CANCELLED, IncidentStatus.BLOCKED, IncidentStatus.OPTED_OUT));
+    ALLOWED.get(IncidentStatus.SCHEDULED).addAll(EnumSet.of(IncidentStatus.BLOCKED, IncidentStatus.OPTED_OUT));
+    ALLOWED.get(IncidentStatus.RECONCILING).addAll(EnumSet.of(IncidentStatus.RECOVERED, IncidentStatus.LATE_AUTHORIZED));
+    ALLOWED.get(IncidentStatus.LATE_AUTHORIZED).add(IncidentStatus.RECOVERED);
+    for (IncidentStatus state : IncidentStatus.values()) {
+      if (!state.isTerminal()) ALLOWED.get(state).addAll(EnumSet.of(IncidentStatus.CANCELLED, IncidentStatus.OPTED_OUT));
+    }
   }
 
   private static void allow(IncidentStatus from, IncidentStatus... to) {

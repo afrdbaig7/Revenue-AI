@@ -21,6 +21,7 @@ spec:
     metadata:
       labels: { app: {{ include "recoverai.fullname" . }}-api }
     spec:
+      automountServiceAccountToken: false
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: api
@@ -28,6 +29,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports: [{ containerPort: 8080 }]
           {{- include "recoverai.env" . | nindent 10 }}
+          env:
+            - { name: WORKER_ENABLED, value: "false" }
+            - { name: PROCESS_ROLE, value: "api" }
+            - name: JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "recoverai.fullname" . }}-api-auth-secrets
+                  key: JWT_SIGNING_KEY
           readinessProbe:
             httpGet: { path: /actuator/health/readiness, port: 8080 }
             periodSeconds: 5
@@ -49,12 +58,20 @@ spec:
     metadata:
       labels: { app: {{ include "recoverai.fullname" . }}-worker }
     spec:
+      automountServiceAccountToken: false
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: worker
           image: "{{ .Values.image.repository }}/worker:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "recoverai.env" . | nindent 10 }}
+          env:
+            - { name: WORKER_ENABLED, value: "true" }
+            - { name: PROCESS_ROLE, value: "worker" }
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
           resources: {{ toYaml .Values.resources.worker | nindent 12 }}
 ---
 apiVersion: apps/v1
@@ -70,6 +87,7 @@ spec:
     metadata:
       labels: { app: {{ include "recoverai.fullname" . }}-ai }
     spec:
+      automountServiceAccountToken: false
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: ai
@@ -80,7 +98,7 @@ spec:
             - configMapRef:
                 name: {{ include "recoverai.fullname" . }}-config
             - secretRef:
-                name: {{ include "recoverai.fullname" . }}-secrets
+                name: {{ include "recoverai.fullname" . }}-ai-secrets
           readinessProbe:
             httpGet: { path: /healthz, port: 8100 }
           resources: {{ toYaml .Values.resources.ai | nindent 12 }}
@@ -98,6 +116,7 @@ spec:
     metadata:
       labels: { app: {{ include "recoverai.fullname" . }}-web }
     spec:
+      automountServiceAccountToken: false
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: web
@@ -105,8 +124,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports: [{ containerPort: 3000 }]
           env:
-            - name: NEXT_PUBLIC_API_BASE
-              value: "https://{{ .Values.ingress.host }}/api/v1"
+            - name: API_PROXY_TARGET
+              value: "http://{{ include "recoverai.fullname" . }}-api:80"
           readinessProbe:
             httpGet: { path: /login, port: 3000 }
           resources: {{ toYaml .Values.resources.web | nindent 12 }}

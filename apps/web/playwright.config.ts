@@ -13,15 +13,16 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:3000",
+    channel: process.env.PLAYWRIGHT_CHANNEL,
+    baseURL: "http://localhost:3100",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npm run start -- -p 3000",
-    url: "http://localhost:3000/login",
-    reuseExistingServer: !process.env.CI,
+    command: "npm run start -- -p 3100",
+    url: "http://localhost:3100/login",
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 });

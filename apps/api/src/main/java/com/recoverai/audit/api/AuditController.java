@@ -35,6 +35,7 @@ public class AuditController {
       @RequestParam(required = false) String eventType,
       @RequestParam(required = false) String entityType) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
+    if (page < 0 || size < 1) throw com.recoverai.common.api.ApiException.badRequest("Invalid pagination");
     Specification<AuditEvent> spec = (root, query, cb) -> {
       var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
       predicates.add(cb.equal(root.get("orgId"), orgId));

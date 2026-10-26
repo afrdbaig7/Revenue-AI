@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useTenantQuery as useQuery } from "@/lib/queries";
 import { api } from "@/lib/api";
 import { formatINR } from "@/lib/format";
 import { PageHeader, Card, Skeleton, EmptyState, SyntheticBanner } from "@/components/ui";

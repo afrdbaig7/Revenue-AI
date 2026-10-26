@@ -17,4 +17,8 @@ public interface WebhookInboxRepository extends JpaRepository<WebhookInbox, UUID
   List<WebhookInbox> findByProcessingStatus(String processingStatus);
 
   long countByProcessingStatus(String processingStatus);
+
+  long countByOrgId(UUID orgId);
+
+  long countByOrgIdAndProcessingStatus(UUID orgId, String processingStatus);
 }

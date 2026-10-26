@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, setAccessToken, setUnauthorizedHandler } from "./api";
+import { useQueryClient } from "@tanstack/react-query";
 
 export interface UserView {
   userId: string;
@@ -22,6 +23,9 @@ interface LoginResponse {
 interface AuthState {
   user: UserView | null;
   loading: boolean;
+  permissions: string[];
+  orgName: string;
+  can: (permission: string) => boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -29,16 +33,24 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<UserView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const [orgName, setOrgName] = useState("");
   const router = useRouter();
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.post<LoginResponse>("/auth/login", { email, password });
-    setAccessToken(res.accessToken);
-    setUser(res.user);
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    setAccessToken(null);
+    const me = await api.get<{ user: UserView; permissions: string[]; orgName: string }>("/auth/me");
+    setUser(me.user);
+    setPermissions(me.permissions);
+    setOrgName(me.orgName);
     router.replace("/overview");
-  }, [router]);
+  }, [router, queryClient]);
 
   const logout = useCallback(async () => {
     try {
@@ -48,24 +60,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     setAccessToken(null);
     setUser(null);
+    setPermissions([]);
+    setOrgName("");
+    await queryClient.cancelQueries();
+    queryClient.clear();
     router.replace("/login");
-  }, [router]);
+  }, [router, queryClient]);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
       setAccessToken(null);
       setUser(null);
-      router.replace("/login");
+      setPermissions([]);
+      setOrgName("");
+      void queryClient.cancelQueries().then(() => queryClient.clear());
+      if (!["/", "/login"].includes(window.location.pathname)) router.replace("/login");
     });
     // Session bootstrap: try the cookie-authenticated /auth/me first (local dev).
     api
-      .get<UserView & { permissions: string[] }>("/auth/me")
-      .then((me) => setUser(me))
+      .get<{ user: UserView; permissions: string[]; orgName: string }>("/auth/me")
+      .then((me) => { setUser(me.user); setPermissions(me.permissions); setOrgName(me.orgName); })
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
-  }, [router]);
+    return () => setUnauthorizedHandler(null);
+  }, [router, queryClient]);
 
-  const value = useMemo(() => ({ user, loading, login, logout }), [user, loading, login, logout]);
+  const value = useMemo(() => ({ user, loading, login, logout, permissions, orgName,
+    can: (permission: string) => permissions.includes("*") || permissions.includes(permission) }), [user, loading, login, logout, permissions, orgName]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

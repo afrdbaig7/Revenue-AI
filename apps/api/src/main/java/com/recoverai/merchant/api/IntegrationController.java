@@ -35,18 +35,22 @@ public class IntegrationController {
   private final MerchantIntegrationRepository integrations;
   private final MerchantRepository merchants;
   private final SecretCipher cipher;
+  private final com.recoverai.audit.application.AuditService audit;
+  private final com.recoverai.integration.razorpay.RazorpayPaymentProvider razorpay;
 
   @GetMapping
   public List<IntegrationView> list(Authentication authentication) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
-    return integrations.findByOrgIdAndActiveTrue(orgId).stream().map(this::toView).toList();
+    return integrations.findByOrgId(orgId).stream().map(this::toView).toList();
   }
 
   @PostMapping("/razorpay/test")
+  @org.springframework.transaction.annotation.Transactional
   @PreAuthorize("hasAnyRole('OWNER','ADMIN')")
   public IntegrationView configureTest(
       Authentication authentication, @Valid @RequestBody RazorpayTestRequest req) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
+    if (!req.keyId().startsWith("rzp_test_")) throw ApiException.badRequest("Only Razorpay test keys are supported");
     Merchant merchant = merchants.findByOrgId(orgId).stream()
         .findFirst()
         .orElseThrow(() -> ApiException.conflict("No merchant configured for this organization"));
@@ -61,10 +65,13 @@ public class IntegrationController {
     integration.setMode("TEST");
     integration.setActive(true);
     integration.setStatus("ACTIVE");
-    return toView(integrations.save(integration));
+    MerchantIntegration saved = integrations.save(integration);
+    audit.record("INTEGRATION_CONFIGURED", "merchant_integration", saved.getId().toString());
+    return toView(saved);
   }
 
   @PostMapping("/{id}/toggle")
+  @org.springframework.transaction.annotation.Transactional
   @PreAuthorize("hasAnyRole('OWNER','ADMIN')")
   public IntegrationView toggle(Authentication authentication, @PathVariable UUID id) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
@@ -72,7 +79,25 @@ public class IntegrationController {
         .filter(i -> i.getOrgId().equals(orgId))
         .orElseThrow(() -> ApiException.notFound("Integration not found"));
     integration.setActive(!integration.isActive());
+    integration.setStatus(integration.isActive() ? "ACTIVE" : "DISABLED");
+    audit.record("INTEGRATION_TOGGLED", "merchant_integration", id.toString());
     return toView(integrations.save(integration));
+  }
+
+  @PostMapping("/{id}/verify")
+  @PreAuthorize("hasAnyRole('OWNER','ADMIN')")
+  public Map<String, Object> verify(Authentication authentication, @PathVariable UUID id) {
+    UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
+    MerchantIntegration integration = integrations.findById(id).filter(i -> i.getOrgId().equals(orgId))
+        .orElseThrow(() -> ApiException.notFound("Integration not found"));
+    if (integration.getKeyIdEncrypted() == null || integration.getKeySecretEncrypted() == null) throw ApiException.badRequest("Configure test credentials first");
+    try {
+      razorpay.withCredentials(cipher.decrypt(integration.getKeyIdEncrypted()), cipher.decrypt(integration.getKeySecretEncrypted())).verifyConnection();
+      audit.record("INTEGRATION_VERIFIED", "merchant_integration", id.toString());
+      return Map.of("verified", true, "mode", "TEST");
+    } catch (com.recoverai.integration.domain.PaymentProvider.ProviderException e) {
+      throw new com.recoverai.common.api.ApiException(com.recoverai.common.api.ErrorCode.PROVIDER_UNAVAILABLE, "Connection verification failed: " + e.category(), 502);
+    }
   }
 
   private IntegrationView toView(MerchantIntegration i) {
@@ -82,7 +107,7 @@ public class IntegrationController {
         i.getMode(),
         i.isActive(),
         i.getStatus(),
-        i.getKeyIdEncrypted() == null ? null : "encrypted:" + i.getKeyIdEncrypted().substring(0, Math.min(8, i.getKeyIdEncrypted().length())) + "...",
+        i.getKeyIdEncrypted() == null ? null : "rzp_test_••••",
         i.getWebhookSecretEncrypted() != null,
         "TEST MODE — no live transactions",
         i.getCreatedAt());

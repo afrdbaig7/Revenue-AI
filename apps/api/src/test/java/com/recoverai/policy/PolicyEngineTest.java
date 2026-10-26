@@ -15,6 +15,23 @@ import org.junit.jupiter.api.Test;
 /** Policy engine is the authorization gate — these rules are load-bearing. */
 class PolicyEngineTest {
 
+  @Test void delayedRetryHasItsOwnCapabilityGate() {
+    setUp();
+    policy.setAllowDelayedRetry(false);
+    assertThat(engine.evaluate(policy, failedPayment, "DELAYED_RETRY", 0, 0, Instant.now(), 349_900).blockingRule()).isEqualTo("DELAYED_RETRY_PROHIBITED");
+  }
+
+  @Test void upiRecoveryCannotBypassPaymentLinkPolicy() {
+    setUp();
+    policy.setAllowPaymentLinks(false);
+    assertThat(engine.evaluate(policy, failedPayment, "UPI_RECOVERY", 0, 0, Instant.now(), 349_900).blockingRule()).isEqualTo("PAYMENT_LINKS_PROHIBITED");
+  }
+
+  @Test void unsupportedStrategiesCannotBecomeSuccessfulNoops() {
+    setUp();
+    assertThat(engine.evaluate(policy, failedPayment, "PROMISE_TO_PAY", 0, 0, Instant.now(), 349_900).blockingRule()).isEqualTo("UNSUPPORTED_STRATEGY");
+  }
+
   private PolicySet policy;
   private PolicyEngine engine;
   private Payment failedPayment;

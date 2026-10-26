@@ -1,7 +1,9 @@
 ﻿"use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useTenantQuery as useQuery } from "@/lib/queries";
 import Link from "next/link";
+import { ChartData } from "@/components/ChartData";
+import { QueryFailure } from "@/components/QueryFailure";
 import { api } from "@/lib/api";
 import type { DashboardSummary, TrendPoint, PageResponse, IncidentRow } from "@/lib/types";
 import { formatINR, formatPercent, formatDate, formatDateTime } from "@/lib/format";
@@ -128,7 +130,8 @@ export default function OverviewPage() {
       />
 
       {/* Simulated Demo Notice */}
-      <SyntheticBanner />
+      {s?.synthetic ? <SyntheticBanner /> : null}
+      <p className="text-xs text-slate-600">Confirmed captures minus refunds, in INR. Recovery rate: recovered incidents divided by all incidents. {s?.asOf ? `Updated ${formatDateTime(s.asOf)} IST; snapshots refresh within five minutes.` : ""}</p>
 
       {/* DOMINANT FINANCIAL OUTCOMES HERO ROW */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -170,14 +173,14 @@ export default function OverviewPage() {
           <div className="mt-3">
             {s ? (
               <div className="text-3xl font-extrabold tabular-nums tracking-tight text-brand-600 sm:text-4xl">
-                {formatINR(s.incrementalRevenueMinor, { compact: false })}
+                {s.incrementalRevenueMinor == null ? "Unavailable" : formatINR(s.incrementalRevenueMinor, { compact: false })}
               </div>
             ) : (
               <Skeleton className="h-10 w-3/4" />
             )}
             <div className="mt-1.5 flex items-center gap-1.5 text-xs text-brand-700 font-medium">
               <TrendingUp className="h-3.5 w-3.5" />
-              <span>Net gain above fixed 3-retry baseline</span>
+              <span>Requires a valid experiment comparison</span>
             </div>
           </div>
         </div>
@@ -201,7 +204,7 @@ export default function OverviewPage() {
               <Skeleton className="h-10 w-1/2" />
             )}
             <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
-              <span className="font-semibold text-mint-600">+24.8% lift</span>
+              <span className="font-semibold text-mint-600">Confirmed captures only</span>
               <span>across {s?.attemptsTotal ?? "…"} recovery attempts</span>
             </div>
           </div>
@@ -242,7 +245,7 @@ export default function OverviewPage() {
           <div className="mt-1.5 text-lg font-bold tabular-nums text-ink-950">
             {s ? s.attemptsTotal : <Skeleton className="h-6 w-16" />}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-400">1.41 avg per incident</div>
+          <div className="mt-0.5 text-[11px] text-slate-400">Recorded recovery attempts</div>
         </div>
 
         {/* Policy Blocks */}
@@ -305,7 +308,7 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-4">
-            {trend.isLoading ? (
+            {trend.isError ? <QueryFailure error={trend.error} retry={() => { void trend.refetch(); }} /> : trend.isLoading ? (
               <Skeleton className="h-64 w-full" />
             ) : (
               <ResponsiveContainer width="100%" height={260}>
@@ -355,6 +358,7 @@ export default function OverviewPage() {
                 </AreaChart>
               </ResponsiveContainer>
             )}
+            {!trend.isError && !trend.isLoading ? <ChartData caption="Recovery performance in rupees" columns={["Date (IST)", "Recovered (INR)", "At risk (INR)"]} rows={trendData.map((row) => [row.date, row.recovered, row.atRisk])} /> : null}
           </div>
         </div>
 
@@ -366,7 +370,7 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-4 flex-1">
-            {strategies.isLoading ? (
+            {strategies.isError ? <QueryFailure error={strategies.error} retry={() => { void strategies.refetch(); }} /> : strategies.isLoading ? (
               <Skeleton className="h-56 w-full" />
             ) : (
               <ResponsiveContainer width="100%" height={240}>
@@ -396,6 +400,7 @@ export default function OverviewPage() {
             )}
           </div>
 
+          {!strategies.isError && !strategies.isLoading ? <ChartData caption="Recovery strategies" columns={["Strategy", "Recovered (INR)", "Uses"]} rows={strategyData.map((row) => [row.name, row.recovered, row.uses])} /> : null}
           <div className="mt-2 border-t border-slate-100 pt-3 text-right">
             <Link
               href="/strategies"
@@ -429,7 +434,7 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-4 divide-y divide-slate-100">
-            {recentIncidents.isLoading ? (
+            {recentIncidents.isError ? <QueryFailure error={recentIncidents.error} retry={() => { void recentIncidents.refetch(); }} /> : recentIncidents.isLoading ? (
               <div className="space-y-3">
                 {Array.from({ length: 4 }).map((_, i) => (
                   <Skeleton key={i} className="h-12 w-full" />
@@ -477,7 +482,7 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-3 flex-1">
-            {failures.isLoading ? (
+            {failures.isError ? <QueryFailure error={failures.error} retry={() => { void failures.refetch(); }} /> : failures.isLoading ? (
               <Skeleton className="h-52 w-full" />
             ) : (
               <ResponsiveContainer width="100%" height={200}>
@@ -501,6 +506,7 @@ export default function OverviewPage() {
                 </PieChart>
               </ResponsiveContainer>
             )}
+            {!failures.isError && !failures.isLoading ? <ChartData caption="Failure distribution" columns={["Failure category", "Incidents"]} rows={failureData.map((row) => [row.name, row.value])} /> : null}
           </div>
         </div>
       </div>

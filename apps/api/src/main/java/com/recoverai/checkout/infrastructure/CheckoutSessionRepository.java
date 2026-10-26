@@ -9,5 +9,7 @@ public interface CheckoutSessionRepository extends JpaRepository<CheckoutSession
 
   Optional<CheckoutSession> findByProviderSessionId(String providerSessionId);
 
+  Optional<CheckoutSession> findByOrgIdAndProviderSessionId(UUID orgId, String providerSessionId);
+
   Optional<CheckoutSession> findByOrgIdAndId(UUID orgId, UUID id);
 }

@@ -24,6 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Slf4j
 public class RecoveryScheduler {
+  @org.springframework.beans.factory.annotation.Value("${recoverai.worker-enabled:true}")
+  private boolean workerEnabled = true;
 
   private final RecoveryActionRepository actions;
   private final RevenueIncidentRepository incidents;
@@ -52,6 +54,12 @@ public class RecoveryScheduler {
 
   @Scheduled(fixedDelayString = "${recoverai.scheduling.action-poll-ms:5000}")
   public void executeDueActions() {
+    if (!workerEnabled) return;
+    for (RecoveryAction abandoned : actions.findByStatusAndLeaseUntilBefore(RecoveryAction.Status.EXECUTING, Instant.now(), PageRequest.of(0, 100))) {
+      com.recoverai.common.tenant.TenantContext.setOrgId(abandoned.getOrgId());
+      try { orchestrator.recoverAbandonedAction(abandoned.getOrgId(), abandoned.getId()); }
+      finally { com.recoverai.common.tenant.TenantContext.clear(); }
+    }
     List<RecoveryAction> due = actions.findDue(Instant.now(), PageRequest.of(0, 100));
     for (RecoveryAction action : due) {
       // Scheduler thread — no request context; tenant travels with the action row.
@@ -71,10 +79,10 @@ public class RecoveryScheduler {
 
   /** Re-drive incidents that are stale in flight states (reconciles provider state). */
   @Scheduled(fixedDelayString = "${recoverai.scheduling.reconcile-poll-ms:30000}")
-  @Transactional
   public void reconcileStaleIncidents() {
+    if (!workerEnabled) return;
     List<RevenueIncident> stale = incidents.findByStatusIn(
-        List.of(IncidentStatus.RECONCILING, IncidentStatus.EXECUTING, IncidentStatus.RETRYABLE_FAILURE),
+        List.of(IncidentStatus.RECONCILING, IncidentStatus.EXECUTING, IncidentStatus.RETRYABLE_FAILURE, IncidentStatus.AWAITING_PAYMENT, IncidentStatus.AWAITING_APPROVAL),
         PageRequest.of(0, 200));
     for (RevenueIncident incident : stale) {
       // Scheduler threads carry no request context — tenant travels with the incident.

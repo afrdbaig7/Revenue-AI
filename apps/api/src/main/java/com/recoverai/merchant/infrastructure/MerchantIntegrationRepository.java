@@ -10,6 +10,8 @@ public interface MerchantIntegrationRepository extends JpaRepository<MerchantInt
 
   List<MerchantIntegration> findByOrgIdAndActiveTrue(UUID orgId);
 
+  List<MerchantIntegration> findByOrgId(UUID orgId);
+
   List<MerchantIntegration> findByProviderAndActiveTrue(String provider);
 
   Optional<MerchantIntegration> findByOrgIdAndProviderAndMode(UUID orgId, String provider, String mode);

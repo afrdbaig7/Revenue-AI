@@ -31,12 +31,15 @@ public class OutboxPublisher {
 
   private static final int MAX_ATTEMPTS = 5;
   private static final int BATCH_SIZE = 200;
+  @org.springframework.beans.factory.annotation.Value("${recoverai.worker-enabled:true}")
+  private boolean workerEnabled = true;
 
   private final OutboxEventRepository repository;
   private final RecoverAiProperties props;
   private final ObjectMapper mapper;
   private final KafkaTemplate<String, String> kafka;
-  private final EventHandlerRegistry handlers;
+  private final EventProcessingService processing;
+  private final OutboxDeliveryService delivery;
   private final Counter published;
   private final Counter failed;
 
@@ -45,22 +48,27 @@ public class OutboxPublisher {
       RecoverAiProperties props,
       ObjectMapper mapper,
       KafkaTemplate<String, String> kafka,
-      EventHandlerRegistry handlers,
+      EventProcessingService processing,
+      OutboxDeliveryService delivery,
       MeterRegistry registry) {
     this.repository = repository;
     this.props = props;
     this.mapper = mapper;
     this.kafka = kafka;
-    this.handlers = handlers;
+    this.processing = processing;
+    this.delivery = delivery;
     this.published = Counter.builder("outbox_published_total").register(registry);
     this.failed = Counter.builder("outbox_failed_total").register(registry);
   }
 
   @Scheduled(fixedDelayString = "${recoverai.scheduling.outbox-poll-ms:1000}")
-  @Transactional
   public void poll() {
-    List<OutboxEvent> due = repository.findPendingDue(Instant.now(), PageRequest.of(0, BATCH_SIZE));
-    for (OutboxEvent event : due) {
+    if (!workerEnabled) return;
+    for (int index = 0; index < BATCH_SIZE; index++) {
+      var claimed = delivery.claim();
+      if (claimed.isEmpty()) break;
+      var claim = claimed.get();
+      OutboxEvent event = claim.event();
       // Worker context: the tenant and correlation id travel WITH the event envelope,
       // never from a request thread (the poller runs outside any HTTP request).
       com.recoverai.common.tenant.TenantContext.setOrgId(event.getOrgId());
@@ -70,17 +78,17 @@ public class OutboxPublisher {
       }
       try {
         if (props.kafkaDispatch()) {
-          kafka.send(topicOf(event.getEventType()), event.getOrgId().toString(), serialize(event)).get();
+          kafka.send(topicOf(event.getEventType()), event.getOrgId().toString(), serialize(event)).get(15, java.util.concurrent.TimeUnit.SECONDS);
         } else {
-          handlers.dispatch(event.getOrgId(), event.getEventType(), event.getPayload());
+          processing.process(event.getOrgId(), event.getId(), event.getEventType(), event.getPayload());
         }
-        repository.markPublished(event.getId(), Instant.now());
+        delivery.complete(claim);
         published.increment();
       } catch (Exception e) {
         failed.increment();
-        Instant retryAt = Instant.now().plus(Duration.ofSeconds(Math.min(60, 5L * (1L << event.getAttempts()))));
-        repository.markFailed(event.getId(), truncate(e.getMessage(), 500), retryAt, MAX_ATTEMPTS);
-        log.warn("OUTBOX_FAILED eventId={} type={} attempts={} error={}", event.getId(), event.getEventType(), event.getAttempts() + 1, e.getMessage());
+        Instant retryAt = Instant.now().plusMillis(Math.min(60_000, 5000L << Math.min(event.getAttempts(), 4)) + java.util.concurrent.ThreadLocalRandom.current().nextLong(1000));
+        delivery.fail(claim, retryAt, MAX_ATTEMPTS);
+        log.warn("OUTBOX_FAILED eventId={} type={} attempts={} category={}", event.getId(), event.getEventType(), event.getAttempts() + 1, e.getClass().getSimpleName());
       } finally {
         com.recoverai.common.tenant.TenantContext.clear();
         org.slf4j.MDC.remove("tenantId");

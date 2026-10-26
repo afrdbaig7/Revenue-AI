@@ -12,4 +12,6 @@ public interface CommunicationRepository extends JpaRepository<Communication, UU
   Page<Communication> findByOrgIdOrderByCreatedAtDesc(UUID orgId, Pageable pageable);
 
   List<Communication> findByIncidentIdOrderByCreatedAtAsc(UUID incidentId);
+
+  java.util.Optional<Communication> findByOrgIdAndOperationKey(UUID orgId, String operationKey);
 }

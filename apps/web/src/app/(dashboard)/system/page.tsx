@@ -1,6 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { QueryFailure } from "@/components/QueryFailure";
+
+import { useTenantQuery as useQuery } from "@/lib/queries";
 import { api } from "@/lib/api";
 import type { SystemHealth } from "@/lib/types";
 import { PageHeader, Card, Skeleton, ToneDot } from "@/components/ui";
@@ -11,6 +13,8 @@ export default function SystemPage() {
     queryFn: () => api.get<SystemHealth>("/system/health"),
     refetchInterval: 10_000,
   });
+
+  if (health.isError) return <QueryFailure error={health.error} retry={() => { void health.refetch(); }} />;
 
   const h = health.data;
 
@@ -34,9 +38,9 @@ export default function SystemPage() {
           <Card title="AI decision service">
             <div className="space-y-2 text-[13px]">
               <Row label="Enabled" value={String(h.aiService.enabled)} />
-              <Row label="Mode" value={h.aiService.mode === "llm" ? "LLM" : "deterministic fallback"} tone={h.aiService.mode === "llm" ? "green" : "amber"} />
-              <Row label="Endpoint" value={h.aiService.baseUrl} mono />
-              <Row label="Fallbacks used" value={String(h.metrics.aiFallbacks ?? 0)} />
+              <Row label="Mode" value={h.aiService.mode} tone={h.aiService.mode === "llm" ? "green" : "amber"} />
+
+
             </div>
           </Card>
 
@@ -50,14 +54,7 @@ export default function SystemPage() {
             </div>
           </Card>
 
-          <Card title="Safety metrics (since boot)">
-            <div className="grid grid-cols-2 gap-3">
-              <Metric label="Duplicate collections prevented" value={h.metrics.duplicateCollectionPrevented ?? 0} />
-              <Metric label="Recoveries" value={h.metrics.recovered ?? 0} />
-              <Metric label="Policy blocks" value={h.metrics.policyBlocks ?? 0} />
-              <Metric label="Invalid signatures rejected" value={h.metrics.webhookInvalidSignatures ?? 0} />
-            </div>
-          </Card>
+          <Card title="Metric visibility"><p className="text-sm text-slate-600">This screen shows your organization&apos;s delivery backlog. Financial outcomes are on Overview. Infrastructure-wide telemetry is restricted to platform monitoring.</p></Card>
 
           <Card title="Runbooks" className="md:col-span-2">
             <div className="grid gap-2 text-[13px] md:grid-cols-2">

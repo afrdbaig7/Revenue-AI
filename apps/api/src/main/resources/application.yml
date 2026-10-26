@@ -89,6 +89,8 @@ springdoc:
     path: /v3/api-docs
 
 recoverai:
+  worker-enabled: ${WORKER_ENABLED:true}
+  process-role: ${PROCESS_ROLE:all}
   demo-mode: ${DEMO_MODE:false}
   event-dispatch-mode: ${EVENT_DISPATCH_MODE:inline}   # inline | kafka
   temporal:
@@ -105,10 +107,12 @@ recoverai:
     read-timeout-ms: 8000
     allowed-hosts: ${RAZORPAY_ALLOWED_HOSTS:api.razorpay.com}
   ai:
+    internal-api-key: ${INTERNAL_API_KEY:}
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8100}
     timeout-ms: 8000
     enabled: ${AI_ENABLED:true}
   jwt:
+    signing-key: ${JWT_SIGNING_KEY:}
     issuer: ${JWT_ISSUER:recoverai-local}
     access-ttl-minutes: ${JWT_ACCESS_TTL_MINUTES:15}
     refresh-ttl-days: ${JWT_REFRESH_TTL_DAYS:7}

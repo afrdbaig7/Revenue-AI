@@ -19,9 +19,12 @@ public class RecoveryActivitiesImpl implements RecoveryActivities {
   private final RecoveryOrchestrator orchestrator;
   private final RecoveryActionRepository actions;
   private final PromiseToPayRepository promises;
+  private final com.recoverai.promise.application.PromiseService promiseService;
 
   @Override
   public void executeRecoveryAction(UUID orgId, UUID actionId) {
+    com.recoverai.common.tenant.TenantContext.setOrgId(orgId);
+    try {
     actions.findById(actionId).ifPresentOrElse(
         action -> {
           try {
@@ -34,6 +37,7 @@ public class RecoveryActivitiesImpl implements RecoveryActivities {
         () -> {
           throw ApiException.notFound("Action not found");
         });
+    } finally { com.recoverai.common.tenant.TenantContext.clear(); }
   }
 
   @Override
@@ -41,7 +45,8 @@ public class RecoveryActivitiesImpl implements RecoveryActivities {
     promises.findById(promiseId).ifPresentOrElse(
         promise -> {
           try {
-            orchestrator.runPipeline(orgId, promise.getIncidentId());
+            if (!promise.getOrgId().equals(orgId)) throw ApiException.notFound("Promise not found");
+            promiseService.processPromise(orgId, promiseId);
           } catch (Exception e) {
             log.warn("TEMPORAL_ACTIVITY_PROMISE_FAILED promise={} error={}", promiseId, e.getMessage());
             throw new RuntimeException(e);

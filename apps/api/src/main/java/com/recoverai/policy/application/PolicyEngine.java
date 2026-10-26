@@ -45,6 +45,10 @@ public class PolicyEngine {
       long proposedAmountMinor) {
 
     List<Check> checks = new ArrayList<>();
+    if (!com.recoverai.recovery.domain.StrategyCapabilities.executable(strategy)) {
+      checks.add(new Check("UNSUPPORTED_STRATEGY", false, "No automatic executor for strategy"));
+      return Evaluation.deny("UNSUPPORTED_STRATEGY", checks);
+    }
 
     // --- Hard stopping rules (never overridable) ---
     if (payment != null && payment.getStatus().isCollectable()) {
@@ -60,7 +64,7 @@ public class PolicyEngine {
       checks.add(new Check("MAX_RETRIES", false, "attempts=" + attemptsSoFar + " max=" + policy.getMaxRetries()));
       return Evaluation.deny("MAX_RETRIES", checks);
     }
-    if (contactsSoFar >= policy.getMaxContactAttempts()) {
+    if (com.recoverai.recovery.domain.StrategyCapabilities.contactsCustomer(strategy) && contactsSoFar >= policy.getMaxContactAttempts()) {
       checks.add(
           new Check("MAX_CONTACTS", false, "contacts=" + contactsSoFar + " max=" + policy.getMaxContactAttempts()));
       return Evaluation.deny("MAX_CONTACTS", checks);
@@ -76,7 +80,10 @@ public class PolicyEngine {
 
     // --- Strategy channel/type gates ---
     switch (strategy) {
-      case "PAYMENT_LINK", "DELAYED_RETRY", "ALTERNATE_PAYMENT_METHOD" -> {
+      case "DELAYED_RETRY" -> {
+        if (!policy.isAllowDelayedRetry()) return Evaluation.deny("DELAYED_RETRY_PROHIBITED", checks);
+      }
+      case "PAYMENT_LINK", "UPI_RECOVERY", "ALTERNATE_PAYMENT_METHOD" -> {
         if (!policy.isAllowPaymentLinks()) {
           checks.add(new Check("PAYMENT_LINKS_PROHIBITED", false, "policy disallows payment links"));
           return Evaluation.deny("PAYMENT_LINKS_PROHIBITED", checks);

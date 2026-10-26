@@ -42,10 +42,14 @@ public class RazorpayPaymentProvider implements PaymentProvider {
   private final Timer orderTimer;
   private final Timer linkTimer;
   private final io.micrometer.core.instrument.Counter errorCounter;
+  private final String keyId;
+  private final String keySecret;
 
   public RazorpayPaymentProvider(RecoverAiProperties props, ObjectMapper mapper, MeterRegistry registry) {
     this.props = props;
     this.mapper = mapper;
+    this.keyId = props.razorpay().keyId();
+    this.keySecret = props.razorpay().keySecret();
     this.client = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(props.razorpay().connectTimeoutMs()))
         .build();
@@ -64,6 +68,26 @@ public class RazorpayPaymentProvider implements PaymentProvider {
     this.linkTimer = Timer.builder("razorpay_request_latency")
         .tag("operation", "create_payment_link")
         .register(registry);
+  }
+
+  private RazorpayPaymentProvider(RazorpayPaymentProvider source, String keyId, String keySecret) {
+    this.props = source.props;
+    this.mapper = source.mapper;
+    this.client = source.client;
+    this.fetchTimer = source.fetchTimer;
+    this.orderTimer = source.orderTimer;
+    this.linkTimer = source.linkTimer;
+    this.errorCounter = source.errorCounter;
+    this.keyId = keyId;
+    this.keySecret = keySecret;
+  }
+
+  public RazorpayPaymentProvider withCredentials(String keyId, String keySecret) {
+    return new RazorpayPaymentProvider(this, keyId, keySecret);
+  }
+
+  public void verifyConnection() throws ProviderException {
+    get("/v1/payments?count=1", fetchTimer);
   }
 
   @Override
@@ -198,8 +222,7 @@ public class RazorpayPaymentProvider implements PaymentProvider {
               : status >= 500
                   ? "TRANSIENT"
                   : "PERMANENT";
-      String detail = response.body().length() > 300 ? response.body().substring(0, 300) : response.body();
-      throw new ProviderException(category, "Razorpay HTTP " + status + ": " + detail);
+      throw new ProviderException(category, "Razorpay HTTP " + status);
     } catch (ProviderException e) {
       errorCounter.increment();
       throw e;
@@ -211,7 +234,7 @@ public class RazorpayPaymentProvider implements PaymentProvider {
   }
 
   private String basicAuth() {
-    String raw = props.razorpay().keyId() + ":" + props.razorpay().keySecret();
+    String raw = keyId + ":" + keySecret;
     return "Basic " + Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
   }
 

@@ -14,7 +14,10 @@ export interface PageResponse<T> {
 export interface DashboardSummary {
   revenueAtRiskMinor: number;
   revenueRecoveredMinor: number;
-  incrementalRevenueMinor: number;
+  incrementalRevenueMinor: number | null;
+  currency?: string;
+  rateDefinition?: string;
+  asOf?: string;
   recoveryRate: number;
   activeIncidents: number;
   unresolvedIncidents: number;
@@ -38,6 +41,7 @@ export interface IncidentRow {
   attemptsCount: number;
   contactCount: number;
   recoveredAmountMinor: number;
+  confirmedRecoveredMinor?: number;
   createdAt: string;
   nextActionAt: string | null;
   customerId: string | null;
@@ -125,6 +129,21 @@ export interface AuditEvent {
   decisionOutputSnapshot?: Record<string, unknown> | null;
 }
 
+export interface IncidentCommunication {
+  id: string;
+  channel: string;
+  status: string;
+  simulated: boolean;
+}
+
+export interface PromiseToPay {
+  id: string;
+  promisedAmountMinor: number;
+  promisedAt: string;
+  preferredChannel: string;
+  status: string;
+}
+
 export interface IncidentDetail {
   incident: IncidentRow;
   payment: unknown;
@@ -132,7 +151,8 @@ export interface IncidentDetail {
   decision: RecoveryDecision | null;
   actions: RecoveryAction[];
   attempts: unknown[];
-  communications: unknown[];
+  communications: IncidentCommunication[];
+  promises?: PromiseToPay[];
   approvals: unknown[];
 }
 

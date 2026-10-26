@@ -51,6 +51,13 @@ public class PromiseService {
   private final AuditService audit;
   private final AiClient aiClient;
   private final ObjectMapper mapper;
+  private final com.recoverai.payment.application.PaymentService paymentService;
+  private final com.recoverai.payment.infrastructure.PaymentRepository payments;
+  private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+  private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+  private final com.recoverai.policy.application.PolicyEngine policyEngine;
+  @org.springframework.beans.factory.annotation.Value("${recoverai.worker-enabled:true}")
+  private boolean workerEnabled = true;
 
   /** Structured promise extracted from free text (AI or deterministic fallback). */
   public record PromiseIntent(Instant promisedAt, String preferredTime, String channel, long amountMinor, double confidence) {}
@@ -63,7 +70,11 @@ public class PromiseService {
     if (!incident.isOpen()) {
       throw ApiException.conflict("Incident is " + incident.getStatus());
     }
+    if (amountMinor <= 0 || amountMinor > incident.getAmountMinor()) throw ApiException.badRequest("Promise amount must be positive and no greater than the incident amount");
+    if (incident.getCustomerId() == null || !incident.getCustomerId().equals(customerId) || !incident.getCurrency().equals(currency)) throw ApiException.badRequest("Promise must match incident customer and currency");
 
+    if (!intent.promisedAt().isAfter(Instant.now()) || (incident.getRecoveryWindowEndsAt() != null
+        && intent.promisedAt().isAfter(incident.getRecoveryWindowEndsAt()))) throw ApiException.badRequest("Promise must be in the future within the recovery window");
     PromiseToPay promise = new PromiseToPay();
     promise.setOrgId(orgId);
     promise.setIncidentId(incidentId);
@@ -78,6 +89,8 @@ public class PromiseService {
     promise.setSource("extraction");
     PromiseToPay saved = promises.save(promise);
 
+    orchestrator.cancelPendingActions(orgId, incidentId, "Customer promised to pay later");
+    incident.setStatus(IncidentStatus.AWAITING_PAYMENT);
     incident.setSelectedStrategy("PROMISE_TO_PAY");
     incident.setNextActionAt(intent.promisedAt());
     incidents.save(incident);
@@ -129,7 +142,7 @@ public class PromiseService {
     String lower = text.toLowerCase();
     LocalDate date = LocalDate.now(zone);
     if (lower.contains("monday")) {
-      date = date.plusDays((8 - date.getDayOfWeek().getValue()) % 7 + 7);
+      date = date.with(java.time.temporal.TemporalAdjusters.next(java.time.DayOfWeek.MONDAY));
     } else if (lower.contains("tomorrow")) {
       date = date.plusDays(1);
     } else if (lower.contains("1st") || lower.contains("first")) {
@@ -146,62 +159,62 @@ public class PromiseService {
     return new PromiseIntent(date.atTime(time).atZone(zone).toInstant(), timeText, "WHATSAPP", 0, 0.65);
   }
 
-  /** Due-promise worker: reconcile, verify rules, send permitted reminder. */
+  /** Each promise has its own transaction; one failure cannot roll back another promise. */
   @Scheduled(fixedDelay = 60_000)
-  @Transactional
   public void processDuePromises() {
-    List<PromiseToPay> due = promises.findByStatusInAndPromisedAtBefore(
-        List.of(PromiseToPay.Status.PROMISED, PromiseToPay.Status.SCHEDULED), Instant.now());
-    for (PromiseToPay promise : due) {
-      try {
-        com.recoverai.common.tenant.TenantContext.setOrgId(promise.getOrgId());
-        RevenueIncident incident = incidents
-            .findByIdForUpdate(promise.getIncidentId())
-            .orElse(null);
-        if (incident == null || !incident.isOpen()) {
-          promise.setStatus(PromiseToPay.Status.CANCELLED);
-          promises.save(promise);
-          continue;
-        }
-        // 1. Reconcile current payment state first.
-        orchestrator.runPipeline(incident.getOrgId(), incident.getId());
-        if (!incident.isOpen() || incident.getStatus() == IncidentStatus.RECOVERED) {
-          promise.setStatus(PromiseToPay.Status.FULFILLED);
-          promise.setFulfilledAt(Instant.now());
-          promises.save(promise);
-          continue;
-        }
-        PolicySet policy = policySets.findByOrgIdAndActiveTrue(incident.getOrgId()).orElse(null);
-        if (policy == null || incident.getContactCount() >= policy.getMaxContactAttempts()) {
-          promise.setStatus(PromiseToPay.Status.MISSED);
-          promises.save(promise);
-          continue;
-        }
-        promise.setStatus(PromiseToPay.Status.DUE);
-        promises.save(promise);
+    if (!workerEnabled) return;
+    var due = promises.findByStatusInAndPromisedAtBefore(
+        List.of(PromiseToPay.Status.PROMISED, PromiseToPay.Status.SCHEDULED, PromiseToPay.Status.DUE), Instant.now(),
+        org.springframework.data.domain.PageRequest.of(0, 100));
+    for (var promise : due) {
+      try { processPromise(promise.getOrgId(), promise.getId()); }
+      catch (Exception error) { log.warn("PROMISE_PROCESSING_FAILED promise={} category={}", promise.getId(), error.getClass().getSimpleName()); }
+    }
+  }
 
-        communicationService.sendRecoveryMessage(
-            incident.getOrgId(),
-            incident.getId(),
-            promise.getCustomerId(),
-            Channel.DEMO_INBOX,
-            "promise_reminder",
-            Map.of(
-                "customerName", "there",
-                "merchantName", "RecoverAI Demo",
-                "amount", "₹" + (promise.getPromisedAmountMinor() / 100)),
-            incident.getContactCount(),
-            policy.getMaxContactAttempts(),
-            Duration.ofHours(policy.getContactCooldownHours()));
-        incident.setContactCount(incident.getContactCount() + 1);
-        incidents.save(incident);
-
-        audit.record("PROMISE_REMINDER_SENT", "promise_to_pay", promise.getId().toString(), promise.getIncidentId(), "SCHEDULED", "DUE", null, null, null);
-      } catch (Exception e) {
-        log.warn("PROMISE_PROCESSING_FAILED promise={} error={}", promise.getId(), e.getMessage());
-      } finally {
-        com.recoverai.common.tenant.TenantContext.clear();
+  public void processPromise(UUID orgId, UUID promiseId) {
+    var previousOrg = com.recoverai.common.tenant.TenantContext.orgId();
+    com.recoverai.common.tenant.TenantContext.setOrgId(orgId);
+    try {
+      var snapshot = promises.findByOrgIdAndId(orgId, promiseId).orElseThrow(() -> ApiException.notFound("Promise not found"));
+      if (snapshot.getPromisedAt().isAfter(Instant.now())) return;
+      RevenueIncident initial = incidents.findByOrgIdAndId(orgId, snapshot.getIncidentId()).orElseThrow();
+      if (initial.getPaymentId() != null && initial.isOpen()) {
+        var payment = payments.findByOrgIdAndId(orgId, initial.getPaymentId()).orElseThrow();
+        var result = paymentService.reconcileFromProvider(orgId, payment);
+        if (!result.verified()) return;
+        if (result.payment().getStatus().isCollectable()) orchestrator.onPaymentCollected(orgId, result.payment());
       }
+      new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+        jdbc.query("SELECT id FROM promises_to_pay WHERE org_id = ? AND id = ? FOR UPDATE", (rs, row) -> rs.getObject(1, UUID.class), orgId, promiseId);
+        PromiseToPay promise = promises.findByOrgIdAndId(orgId, promiseId).orElseThrow();
+        if (!List.of(PromiseToPay.Status.PROMISED, PromiseToPay.Status.SCHEDULED, PromiseToPay.Status.DUE).contains(promise.getStatus())) return;
+        RevenueIncident incident = incidents.findByIdForUpdate(promise.getIncidentId()).filter(i -> i.getOrgId().equals(orgId)).orElseThrow();
+        if (!incident.isOpen()) {
+          promise.setStatus(incident.getStatus() == IncidentStatus.RECOVERED ? PromiseToPay.Status.FULFILLED : PromiseToPay.Status.CANCELLED);
+          if (promise.getStatus() == PromiseToPay.Status.FULFILLED) promise.setFulfilledAt(Instant.now());
+        } else if (incident.getRecoveryWindowEndsAt() != null && !incident.getRecoveryWindowEndsAt().isAfter(Instant.now())) {
+          promise.setStatus(PromiseToPay.Status.MISSED);
+        } else if (promise.getStatus() != PromiseToPay.Status.DUE) {
+          PolicySet policy = policySets.findByOrgIdAndActiveTrue(orgId).orElseThrow();
+          String strategy = switch (promise.getPreferredChannel()) { case "EMAIL" -> "EMAIL_NUDGE"; case "SMS" -> "SMS_NUDGE"; default -> "WHATSAPP_NUDGE"; };
+          var allowed = policyEngine.evaluate(policy, null, strategy, incident.getAttemptsCount(), incident.getContactCount(), Instant.now(), incident.getAmountMinor());
+          if (!allowed.allowed()) { promise.setStatus(PromiseToPay.Status.CANCELLED); }
+          else {
+            var message = communicationService.sendRecoveryMessage(orgId, incident.getId(), promise.getCustomerId(), Channel.DEMO_INBOX,
+                "promise_reminder", Map.of("customerName", "there", "merchantName", "Merchant", "amount", "INR " + promise.getPromisedAmountMinor() / 100.0,
+                "_operationKey", "promise:" + promiseId), incident.getContactCount(), policy.getMaxContactAttempts(), Duration.ofHours(policy.getContactCooldownHours()));
+            if (message.getStatus() == com.recoverai.communication.domain.Communication.Status.SENT || message.getStatus() == com.recoverai.communication.domain.Communication.Status.SIMULATED) {
+              promise.setStatus(PromiseToPay.Status.DUE);
+              audit.record("PROMISE_REMINDER_SENT", "promise_to_pay", promiseId.toString(), incident.getId(), "SCHEDULED", "DUE", null, null, null);
+            } else { promise.setStatus(PromiseToPay.Status.CANCELLED); }
+          }
+        }
+        promises.save(promise);
+      });
+    } finally {
+      if (previousOrg == null) com.recoverai.common.tenant.TenantContext.clear();
+      else com.recoverai.common.tenant.TenantContext.setOrgId(previousOrg);
     }
   }
 }

@@ -36,6 +36,8 @@ public class AiClient {
 
   private volatile int consecutiveFailures;
   private volatile Instant circuitOpenedAt;
+  @org.springframework.beans.factory.annotation.Value("${recoverai.ai.internal-api-key:}")
+  private String internalApiKey = "";
 
   public AiClient(RecoverAiProperties props, ObjectMapper mapper, MeterRegistry registry) {
     this.props = props;
@@ -69,6 +71,7 @@ public class AiClient {
       HttpRequest request = HttpRequest.newBuilder()
           .uri(URI.create(props.ai().baseUrl() + path))
           .header("Content-Type", "application/json")
+          .header("X-Internal-Api-Key", internalApiKey)
           .timeout(Duration.ofMillis(props.ai().timeoutMs()))
           .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(requestBody)))
           .build();

@@ -30,6 +30,7 @@ public class RecoveryAction {
   public enum Status {
     SCHEDULED,
     EXECUTING,
+    AMBIGUOUS,
     SUCCEEDED,
     FAILED,
     CANCELLED,
@@ -62,6 +63,9 @@ public class RecoveryAction {
 
   @Column(name = "executed_at")
   private Instant executedAt;
+
+  @Column(name = "lease_until")
+  private Instant leaseUntil;
 
   @Column(name = "idempotency_key", nullable = false, unique = true, length = 190)
   private String idempotencyKey;

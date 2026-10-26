@@ -1,11 +1,18 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryFailure } from "@/components/QueryFailure";
+import { PromisePanel } from "@/components/PromisePanel";
+
+import { useTenantQuery as useQuery } from "@/lib/queries";
+
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth";
+import { useState } from "react";
 import { api, ApiError } from "@/lib/api";
-import type { IncidentDetail, AuditEvent } from "@/lib/types";
+import type { IncidentDetail, AuditEvent, PageResponse } from "@/lib/types";
 import { formatINR, formatDateTime, timeAgo, shortId } from "@/lib/format";
-import { PageHeader, Card, StatusBadge, Button, Skeleton, EmptyState, ToneDot } from "@/components/ui";
+import { PageHeader, Card, StatusBadge, Button, Skeleton, EmptyState, Pagination } from "@/components/ui";
 
 function Timeline({ events }: { events: AuditEvent[] }) {
   if (!events.length) return <EmptyState title="No audit events for this incident" />;
@@ -40,6 +47,11 @@ function Timeline({ events }: { events: AuditEvent[] }) {
 }
 
 export default function IncidentDetailPage() {
+  const { can } = useAuth();
+  const [actionError, setActionError] = useState<Error | null>(null);
+  const [auditPage, setAuditPage] = useState(0);
+  const [cancelReason, setCancelReason] = useState("");
+  const [showCancel, setShowCancel] = useState(false);
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -50,25 +62,34 @@ export default function IncidentDetailPage() {
   });
 
   const audit = useQuery({
-    queryKey: ["audit", params.id],
-    queryFn: () => api.get<{ items: AuditEvent[] }>(`/audit-events?incidentId=${params.id}&size=100`),
+    queryKey: ["audit", params.id, auditPage],
+    queryFn: () => api.get<PageResponse<AuditEvent>>(`/audit-events?incidentId=${params.id}&page=${auditPage}&size=25`),
+    enabled: can("audit:read"),
   });
 
   const reprocess = useMutation({
     mutationFn: () => api.post(`/incidents/${params.id}/reprocess`),
+    onError: (error) => setActionError(error),
     onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries();
       queryClient.invalidateQueries({ queryKey: ["incident", params.id] });
       queryClient.invalidateQueries({ queryKey: ["summary"] });
     },
   });
 
   const cancel = useMutation({
-    mutationFn: () => api.post(`/incidents/${params.id}/cancel`, { reason: "cancelled from dashboard" }),
+    mutationFn: () => api.post(`/incidents/${params.id}/cancel`, { reason: cancelReason.trim() }),
+    onError: (error) => setActionError(error),
     onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries();
       queryClient.invalidateQueries({ queryKey: ["incident", params.id] });
       queryClient.invalidateQueries({ queryKey: ["summary"] });
     },
   });
+
+  if (detail.isError) return <QueryFailure error={detail.error} retry={() => { void detail.refetch(); }} />;
 
   if (detail.isLoading) {
     return (
@@ -92,12 +113,12 @@ export default function IncidentDetailPage() {
         subtitle={`${i.incidentType.replaceAll("_", " ")} · detected ${timeAgo(i.detectedAt ?? i.createdAt)}`}
         actions={
           <>
-            {!terminal ? (
+            {!terminal && can("recovery:manage") ? (
               <>
                 <Button variant="secondary" onClick={() => reprocess.mutate()} disabled={reprocess.isPending}>
                   Reprocess
                 </Button>
-                <Button variant="danger" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+                <Button variant="danger" onClick={() => setShowCancel(true)} disabled={cancel.isPending}>
                   Cancel recovery
                 </Button>
               </>
@@ -107,6 +128,12 @@ export default function IncidentDetailPage() {
         }
       />
 
+      <QueryFailure error={actionError} />
+      {showCancel && !terminal ? <form className="mb-4 rounded-lg border border-rose-200 p-4" onSubmit={(event) => { event.preventDefault(); cancel.mutate(undefined, { onSuccess: () => setShowCancel(false) }); }}>
+        <label className="block text-xs font-medium">Cancellation reason <textarea required maxLength={500} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} className="mt-1 block w-full rounded border p-2" /></label>
+        <p className="my-2 text-xs text-slate-600">Pending actions will stop. The reason will be recorded with this incident.</p>
+        <div className="flex gap-2"><Button type="submit" variant="danger" disabled={cancel.isPending || !cancelReason.trim()}>Confirm cancellation</Button><Button type="button" variant="secondary" onClick={() => setShowCancel(false)}>Keep recovery</Button></div>
+      </form> : null}
       {/* Headline */}
       <div className="card p-5">
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
@@ -136,7 +163,7 @@ export default function IncidentDetailPage() {
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Recovered</div>
             <div className="text-sm font-semibold tabular-nums text-emerald-600">
-              {formatINR(i.recoveredAmountMinor)}
+              {formatINR(i.confirmedRecoveredMinor ?? 0)}
               {i.netRecoveredMinor != null && i.netRecoveredMinor > 0 ? (
                 <span className="ml-1 text-[10px] text-slate-400">net {formatINR(i.netRecoveredMinor)}</span>
               ) : null}
@@ -257,9 +284,11 @@ export default function IncidentDetailPage() {
       </div>
 
       {/* Timeline */}
-      <Card title="Audit timeline (immutable)" className="mt-4">
-        {audit.isLoading ? <Skeleton className="h-48" /> : <Timeline events={audit.data?.items ?? []} />}
-      </Card>
+      <PromisePanel detail={d} />
+      {can("audit:read") ? <Card title="Audit timeline (immutable)" className="mt-4">
+        {audit.isLoading ? <Skeleton className="h-48" /> : audit.isError ? <QueryFailure error={audit.error} retry={() => { void audit.refetch(); }} /> : <Timeline events={audit.data?.items ?? []} />}
+        <Pagination page={auditPage} totalPages={audit.data?.totalPages ?? 0} onChange={setAuditPage} />
+      </Card> : null}
     </div>
   );
 }

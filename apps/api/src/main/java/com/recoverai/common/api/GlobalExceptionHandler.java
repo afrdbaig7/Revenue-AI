@@ -53,6 +53,17 @@ public class GlobalExceptionHandler {
         .body(new ApiError(ErrorCode.INTERNAL_ERROR.name(), "Internal server error", correlationId(req), null));
   }
 
+  @ExceptionHandler({org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+      jakarta.validation.ConstraintViolationException.class, org.springframework.http.converter.HttpMessageNotReadableException.class})
+  public ResponseEntity<ApiError> handleInvalidInput(Exception ex, HttpServletRequest req) {
+    return ResponseEntity.badRequest().body(new ApiError(ErrorCode.VALIDATION_ERROR.name(), "Invalid request parameters or body", correlationId(req), null));
+  }
+
+  @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+  public ResponseEntity<ApiError> handleVersionConflict(Exception ex, HttpServletRequest req) {
+    return ResponseEntity.status(409).body(new ApiError(ErrorCode.CONFLICT.name(), "Record changed; reload before saving", correlationId(req), null));
+  }
+
   private String correlationId(HttpServletRequest req) {
     String cid = req.getHeader("X-Correlation-Id");
     if (cid == null || cid.isBlank()) {

@@ -1,5 +1,8 @@
 # RecoverAI
 
+Latest implementation progress, validation results and outstanding release work:
+[26 October implementation handoff](docs/implementation-progress-2026-10-26.md).
+
 **AI Revenue Recovery & Payment Reliability Engine**
 
 RecoverAI detects revenue that is at risk of being lost to failed payments, failed

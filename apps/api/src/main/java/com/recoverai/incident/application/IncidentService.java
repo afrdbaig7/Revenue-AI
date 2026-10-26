@@ -186,7 +186,8 @@ public class IncidentService {
     if (incident.getStatus() == to) {
       return incident;
     }
-    IncidentStatus next = IncidentStateMachine.transition(incident.getStatus(), to);
+    IncidentStatus previous = incident.getStatus();
+    IncidentStatus next = IncidentStateMachine.transition(previous, to);
     incident.setStatus(next);
     applyTimestamps(incident, next, reason);
     RevenueIncident saved = repository.save(incident);
@@ -194,7 +195,7 @@ public class IncidentService {
         "INCIDENT_TRANSITION",
         "revenue_incident",
         saved.getId().toString(),
-        incident.getStatus().name(),
+        previous.name(),
         next.name(),
         null,
         audit.json(java.util.Map.of("reason", reason == null ? "" : reason)),
@@ -231,6 +232,7 @@ public class IncidentService {
     RevenueIncident incident = repository
         .findByIdForUpdate(incidentId)
         .orElseThrow(() -> ApiException.notFound("Incident not found"));
+    if (!incident.getOrgId().equals(orgId)) throw ApiException.notFound("Incident not found");
     if (incident.getStatus() == IncidentStatus.RECOVERED || incident.getStatus() == IncidentStatus.CLOSED) {
       return; // idempotent
     }

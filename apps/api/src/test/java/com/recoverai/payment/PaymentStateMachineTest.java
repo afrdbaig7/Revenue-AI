@@ -13,6 +13,16 @@ import org.junit.jupiter.api.Test;
 /** Payment state machine + failure taxonomy — correctness of the money-state model. */
 class PaymentStateMachineTest {
 
+  @Test void capturedFirstObservationIsSupported() {
+    assertThat(PaymentStateMachine.observe(PaymentStatus.CREATED, PaymentStatus.CAPTURED)).isEqualTo(PaymentStatus.CAPTURED);
+  }
+
+  @Test void reorderedObservationsCannotUndoCapturedOrRefundedState() {
+    assertThat(PaymentStateMachine.observe(PaymentStatus.CAPTURED, PaymentStatus.FAILED)).isEqualTo(PaymentStatus.CAPTURED);
+    assertThat(PaymentStateMachine.observe(PaymentStatus.CAPTURED, PaymentStatus.AUTHORIZED)).isEqualTo(PaymentStatus.CAPTURED);
+    assertThat(PaymentStateMachine.observe(PaymentStatus.REFUNDED, PaymentStatus.CAPTURED)).isEqualTo(PaymentStatus.REFUNDED);
+  }
+
   @Test
   void normalLifecycle() {
     assertThat(PaymentStateMachine.transition(PaymentStatus.CREATED, PaymentStatus.PENDING))

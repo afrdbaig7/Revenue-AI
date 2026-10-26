@@ -10,10 +10,10 @@ COPY apps/api/src ./src
 RUN mvn -q -B package -DskipTests
 
 FROM eclipse-temurin:21-jre-alpine
-RUN addgroup -S recoverai && adduser -S -G recoverai recoverai
+RUN addgroup -S -g 10001 recoverai && adduser -S -u 10001 -G recoverai recoverai
 USER recoverai
 WORKDIR /app
-COPY --from=build /build/target/recoverai-api-0.1.0.jar app.jar
+COPY --from=build --chown=10001:10001 /build/target/recoverai-api-0.1.0.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar", \
   "--recoverai.event-dispatch-mode=kafka", "--server.port=8080"]

@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import time
+import threading
 from typing import Any, Optional
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from .config import Settings
 
@@ -27,23 +27,30 @@ class CircuitBreaker:
         self.cooldown_seconds = cooldown_seconds
         self.failures = 0
         self.opened_at: Optional[float] = None
+        self._lock = threading.Lock()
+        self._probing = False
 
     def allow(self) -> bool:
-        if self.opened_at is None:
-            return True
-        if time.monotonic() - self.opened_at > self.cooldown_seconds:
-            self.opened_at = None
-            self.failures = 0
-            return True
-        return False
+        with self._lock:
+            if self.opened_at is None:
+                return True
+            if time.monotonic() - self.opened_at > self.cooldown_seconds and not self._probing:
+                self._probing = True
+                return True
+            return False
 
     def record_success(self) -> None:
-        self.failures = 0
+        with self._lock:
+            self.failures = 0
+            self.opened_at = None
+            self._probing = False
 
     def record_failure(self) -> None:
-        self.failures += 1
-        if self.failures >= self.failure_threshold:
-            self.opened_at = time.monotonic()
+        with self._lock:
+            self.failures += 1
+            self._probing = False
+            if self.failures >= self.failure_threshold:
+                self.opened_at = time.monotonic()
 
 
 class LlmProvider:
@@ -55,14 +62,35 @@ class LlmProvider:
             settings.circuit_breaker_failures, settings.circuit_breaker_cooldown_seconds
         )
         self.client = httpx.Client(timeout=settings.llm_timeout_seconds)
+        self._slots = threading.BoundedSemaphore(settings.max_concurrent_requests)
+
+    def close(self) -> None:
+        self.client.close()
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
         if not self.settings.provider_configured:
             raise LlmUnavailable("LLM provider not configured")
+        if not self._slots.acquire(blocking=False):
+            raise LlmUnavailable("capacity reached")
         if not self.breaker.allow():
+            self._slots.release()
             raise LlmUnavailable("circuit open")
         try:
-            text = self._call(system_prompt, user_payload)
+            deadline = time.monotonic() + self.settings.llm_timeout_seconds
+            text = ""
+            for attempt in range(self.settings.llm_max_retries + 1):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LlmUnavailable("deadline exceeded")
+                try:
+                    text = self._call(system_prompt, user_payload, min(remaining / 4, 1.5))
+                    break
+                except httpx.HTTPError as exc:
+                    retryable = not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code in {429, 500, 502, 503, 504}
+                    if not retryable or attempt >= self.settings.llm_max_retries:
+                        raise
+                    delay = min(0.1 * 2 ** attempt, max(0, deadline - time.monotonic()))
+                    time.sleep(delay)
             data = json.loads(text)
             if not isinstance(data, dict):
                 raise LlmUnavailable("non-object JSON from provider")
@@ -73,19 +101,16 @@ class LlmProvider:
             if isinstance(exc, LlmUnavailable):
                 raise
             raise LlmUnavailable(f"provider failure: {exc}") from exc
+        finally:
+            self._slots.release()
 
-    def _call(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+    def _call(self, system_prompt: str, user_payload: dict[str, Any], timeout: float) -> str:
         provider = self.settings.llm_provider
         if provider == "gemini":
-            return self._call_gemini(system_prompt, user_payload)
-        return self._call_openai_compatible(system_prompt, user_payload)
+            return self._call_gemini(system_prompt, user_payload, timeout)
+        return self._call_openai_compatible(system_prompt, user_payload, timeout)
 
-    @retry(
-        retry=retry_if_exception_type(httpx.HTTPError),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, max=4),
-    )
-    def _call_openai_compatible(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+    def _call_openai_compatible(self, system_prompt: str, user_payload: dict[str, Any], timeout: float) -> str:
         settings = self.settings
         if settings.llm_provider == "groq":
             url = "https://api.groq.com/openai/v1/chat/completions"
@@ -98,6 +123,7 @@ class LlmProvider:
 
         response = self.client.post(
             url,
+            timeout=timeout,
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": model,
@@ -112,12 +138,7 @@ class LlmProvider:
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
 
-    @retry(
-        retry=retry_if_exception_type(httpx.HTTPError),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, max=4),
-    )
-    def _call_gemini(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+    def _call_gemini(self, system_prompt: str, user_payload: dict[str, Any], timeout: float) -> str:
         settings = self.settings
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -125,6 +146,7 @@ class LlmProvider:
         )
         response = self.client.post(
             url,
+            timeout=timeout,
             json={
                 "system_instruction": {"parts": [{"text": system_prompt}]},
                 "contents": [{"role": "user", "parts": [{"text": json.dumps(user_payload)}]}],

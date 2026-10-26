@@ -64,7 +64,7 @@ function isItemActive(pathname: string, href: string) {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user, logout } = useAuth();
+  const { user, logout, orgName, can } = useAuth();
 
   return (
     <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-200 bg-white lg:flex">
@@ -89,7 +89,7 @@ export function Sidebar() {
               {group.title}
             </div>
             <nav className="space-y-0.5" aria-label={group.title}>
-              {group.items.map((item) => {
+              {group.items.filter((item) => item.href !== "/system" || user?.role !== "VIEWER").map((item) => {
                 const active = isItemActive(pathname, item.href);
                 const Icon = item.icon;
                 return (
@@ -144,7 +144,7 @@ export function Sidebar() {
               {user?.fullName || "Operator User"}
             </div>
             <div className="truncate text-[10px] text-slate-400">
-              {user?.role || "OPERATOR"} · Demo Store
+              {user?.role || "VIEWER"} · {orgName}
             </div>
           </div>
           <button

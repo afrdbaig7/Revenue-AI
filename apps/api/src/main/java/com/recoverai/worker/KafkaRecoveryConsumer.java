@@ -30,19 +30,19 @@ import org.springframework.stereotype.Component;
 public class KafkaRecoveryConsumer {
 
   private static final List<String> TOPICS = List.of(
-      "payment-events", "subscription-events", "recovery-incidents",
+      "payment-events", "subscription-events", "checkout-events", "workflow-events", "recovery-incidents",
       "recovery-actions", "recovery-results", "audit-events", "notification-events");
 
-  private final com.recoverai.outbox.application.OutboxPublisher.EventHandlerRegistry handlers;
+  private final com.recoverai.outbox.application.EventProcessingService processing;
   private final ObjectMapper mapper;
 
   public KafkaRecoveryConsumer(
-      com.recoverai.outbox.application.OutboxPublisher.EventHandlerRegistry handlers, ObjectMapper mapper) {
-    this.handlers = handlers;
+      com.recoverai.outbox.application.EventProcessingService processing, ObjectMapper mapper) {
+    this.processing = processing;
     this.mapper = mapper;
   }
 
-  @KafkaListener(topics = "#{@kafkaRecoveryConsumer.topics}")
+  @KafkaListener(topics = "#{@kafkaRecoveryConsumer.topics}", autoStartup = "${recoverai.worker-enabled:true}")
   public void onEvent(ConsumerRecord<String, String> record, @Payload String body) {
     try {
       JsonNode envelope = mapper.readTree(body);
@@ -59,10 +59,11 @@ public class KafkaRecoveryConsumer {
       MDC.put("topic", record.topic());
       MDC.put("offset", String.valueOf(record.offset()));
 
-      handlers.dispatch(orgId, eventType, payload);
+      if (envelope.path("schemaVersion").asInt() != 1) throw new IllegalArgumentException("Unsupported event schema");
+      processing.process(orgId, UUID.fromString(envelope.path("eventId").asText()), eventType, payload);
     } catch (Exception e) {
       // At-least-once delivery: handler-level idempotency makes retries safe.
-      log.error("EVENT_CONSUME_FAILED topic={} offset={} error={}", record.topic(), record.offset(), e.getMessage());
+      log.error("EVENT_CONSUME_FAILED topic={} offset={} category={}", record.topic(), record.offset(), e.getClass().getSimpleName());
       throw new RuntimeException(e);
     } finally {
       TenantContext.clear();

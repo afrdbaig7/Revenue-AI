@@ -9,5 +9,7 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, UUID
 
   Optional<Subscription> findByProviderSubscriptionId(String providerSubscriptionId);
 
+  Optional<Subscription> findByOrgIdAndProviderSubscriptionId(UUID orgId, String providerSubscriptionId);
+
   Optional<Subscription> findByOrgIdAndId(UUID orgId, UUID id);
 }

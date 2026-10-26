@@ -35,7 +35,7 @@ public class OutboxEvent {
   @Column(name = "aggregate_type", nullable = false, length = 64)
   private String aggregateType;
 
-  @Column(name = "aggregate_id", nullable = false, length = 64)
+  @Column(name = "aggregate_id", nullable = false, length = 128)
   private String aggregateId;
 
   @Column(name = "event_type", nullable = false, length = 64)

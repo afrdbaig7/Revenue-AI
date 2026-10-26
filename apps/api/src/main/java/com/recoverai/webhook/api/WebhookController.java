@@ -63,8 +63,8 @@ public class WebhookController {
         Timer.builder("webhook_processing_latency").description("Webhook ingest latency").register(registry);
   }
 
-  @PostMapping(value = "/razorpay", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-  public ResponseEntity<?> razorpay(HttpServletRequest request) throws IOException {
+  @PostMapping(value = {"/razorpay", "/razorpay/{integrationId}"}, consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+  public ResponseEntity<?> razorpay(HttpServletRequest request, @org.springframework.web.bind.annotation.PathVariable(required = false) java.util.UUID integrationId) throws IOException {
     received.increment();
     long start = System.nanoTime();
 
@@ -77,11 +77,12 @@ public class WebhookController {
     }
 
     // 1. Raw body before parsing.
-    byte[] rawBody = request.getInputStream().readAllBytes();
+    byte[] rawBody = request.getInputStream().readNBytes(1_048_577);
+    if (rawBody.length > 1_048_576) return ResponseEntity.status(413).body(new ApiError(ErrorCode.VALIDATION_ERROR.name(), "Webhook too large", MDC.get("correlationId"), null));
     String signature = request.getHeader(RazorpaySignatureVerifier.SIGNATURE_HEADER);
 
     // 2. Verify before trusting anything.
-    VerificationResult verification = verifier.verify(rawBody, signature);
+    VerificationResult verification = verifier.verify(rawBody, signature, integrationId);
     if (!verification.valid()) {
       invalidSignature.increment();
       return ResponseEntity.status(401)
@@ -97,9 +98,11 @@ public class WebhookController {
       return ResponseEntity.badRequest()
           .body(new ApiError(ErrorCode.VALIDATION_ERROR.name(), "Malformed webhook body", MDC.get("correlationId"), null));
     }
-    String eventId = event.path("id").asText();
+    if (event == null || !event.isObject()) return ResponseEntity.badRequest().body(new ApiError(ErrorCode.VALIDATION_ERROR.name(), "Expected webhook object", MDC.get("correlationId"), null));
+    String eventId = request.getHeader("X-Razorpay-Event-Id");
+    if (eventId == null || eventId.isBlank()) eventId = event.path("id").asText();
     String eventType = event.path("event").asText();
-    if (eventId.isBlank() || eventType.isBlank()) {
+    if (eventId.isBlank() || eventId.length() > 128 || eventType.isBlank() || eventType.length() > 64) {
       return ResponseEntity.badRequest()
           .body(new ApiError(ErrorCode.VALIDATION_ERROR.name(), "Webhook missing id/event", MDC.get("correlationId"), null));
     }

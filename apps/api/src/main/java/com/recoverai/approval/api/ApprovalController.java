@@ -36,20 +36,23 @@ public class ApprovalController {
       @RequestParam(defaultValue = "25") int size,
       @RequestParam(defaultValue = "PENDING") String status) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
+    if (page < 0 || size < 1) throw com.recoverai.common.api.ApiException.badRequest("Invalid pagination");
+    try { Approval.Status.valueOf(status); }
+    catch (IllegalArgumentException e) { throw com.recoverai.common.api.ApiException.badRequest("Unknown approval status"); }
     Page<Approval> result = approvals.findByOrgIdAndStatusOrderByCreatedAtAsc(orgId, Approval.Status.valueOf(status), PageRequest.of(page, Math.min(size, 100)));
     return PageResponse.of(result.getContent(), page, Math.min(size, 100), result.getTotalElements());
   }
 
   @PostMapping("/{id}/approve")
   @PreAuthorize("hasAnyRole('OWNER','ADMIN','OPERATOR')")
-  public Approval approve(Authentication authentication, @PathVariable UUID id, @RequestBody(required = false) DecisionRequest req) {
+  public Approval approve(Authentication authentication, @PathVariable UUID id, @jakarta.validation.Valid @RequestBody(required = false) DecisionRequest req) {
     CurrentUser user = (CurrentUser) authentication.getPrincipal();
     return approvalService.approve(user.orgId(), id, user, req == null ? null : req.note());
   }
 
   @PostMapping("/{id}/reject")
   @PreAuthorize("hasAnyRole('OWNER','ADMIN','OPERATOR')")
-  public Approval reject(Authentication authentication, @PathVariable UUID id, @RequestBody(required = false) DecisionRequest req) {
+  public Approval reject(Authentication authentication, @PathVariable UUID id, @jakarta.validation.Valid @RequestBody(required = false) DecisionRequest req) {
     CurrentUser user = (CurrentUser) authentication.getPrincipal();
     return approvalService.reject(user.orgId(), id, user, req == null ? null : req.note());
   }

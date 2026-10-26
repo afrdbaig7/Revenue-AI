@@ -11,4 +11,6 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID>, JpaSpec
   Optional<Payment> findByProviderAndProviderPaymentId(String provider, String providerPaymentId);
 
   Optional<Payment> findByOrgIdAndId(UUID orgId, UUID id);
+
+  Optional<Payment> findByOrgIdAndProviderAndProviderPaymentId(UUID orgId, String provider, String providerPaymentId);
 }

@@ -82,7 +82,7 @@ public class AuthService {
     return issueTokens(user, membership);
   }
 
-  @Transactional
+  @Transactional(noRollbackFor = ApiException.class)
   public TokenPair refresh(String opaqueToken) {
     if (opaqueToken == null || opaqueToken.isBlank()) {
       throw new ApiException(ErrorCode.UNAUTHENTICATED, "Missing refresh token", 401);
@@ -104,6 +104,10 @@ public class AuthService {
     }
 
     User user = users.findById(stored.getUserId()).orElseThrow();
+    if (!"ACTIVE".equals(user.getStatus())) {
+      refreshTokens.revokeFamily(stored.getFamilyId(), Instant.now());
+      throw new ApiException(ErrorCode.FORBIDDEN, "Account is disabled", 403);
+    }
     Membership membership = memberships
         .findByOrgIdAndUserId(stored.getOrgId(), stored.getUserId())
         .orElseThrow(() -> new ApiException(ErrorCode.FORBIDDEN, "Membership missing", 403));
@@ -115,8 +119,9 @@ public class AuthService {
     String newOpaque = newOpaqueToken();
     RefreshToken next =
         new RefreshToken(stored.getOrgId(), user.getId(), sha256Hex(newOpaque), stored.getFamilyId(), refreshExpiry());
-    next.setReplacedBy(stored.getId());
     refreshTokens.save(next);
+    stored.setReplacedBy(next.getId());
+    refreshTokens.save(stored);
 
     String access = jwtService.issueAccessToken(
         user.getId(), membership.getOrgId(), user.getEmail(), user.getFullName(), membership.getRole().name());

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
@@ -55,9 +55,10 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
 ];
 
 export function MobileNav() {
+  const drawerRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const { user, logout } = useAuth();
+  const { user, logout, orgName, can } = useAuth();
 
   // Close drawer on route change
   useEffect(() => {
@@ -68,14 +69,25 @@ export function MobileNav() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
+      if (e.key === "Tab") {
+        const controls = drawerRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])');
+        if (!controls?.length) return;
+        const first = controls[0], last = controls[controls.length - 1];
+        if (e.shiftKey && (document.activeElement === first || document.activeElement === drawerRef.current)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
     };
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
     if (open) {
+      drawerRef.current?.focus();
       document.addEventListener("keydown", handleKeyDown);
       document.body.style.overflow = "hidden";
     }
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = "";
+      document.body.style.overflow = previousOverflow;
+      if (open) previous?.focus();
     };
   }, [open]);
 
@@ -115,7 +127,11 @@ export function MobileNav() {
           open ? "translate-x-0" : "-translate-x-full"
         }`}
         role="dialog"
-        aria-modal="true"
+        ref={drawerRef}
+        tabIndex={-1}
+        inert={!open}
+        aria-hidden={!open}
+        aria-modal={open || undefined}
         aria-label="Mobile Navigation"
       >
         {/* Drawer Header */}
@@ -144,7 +160,7 @@ export function MobileNav() {
                 {group.title}
               </div>
               <div className="space-y-0.5">
-                {group.items.map((item) => {
+                {group.items.filter((item) => item.href !== "/system" || user?.role !== "VIEWER").map((item) => {
                   const active = pathname === item.href || (item.href !== "/overview" && pathname.startsWith(item.href));
                   const Icon = item.icon;
                   return (

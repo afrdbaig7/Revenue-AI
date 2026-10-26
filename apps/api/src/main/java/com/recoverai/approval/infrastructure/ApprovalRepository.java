@@ -17,5 +17,9 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
 
   Optional<Approval> findByOrgIdAndId(UUID orgId, UUID id);
 
+  @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+  @org.springframework.data.jpa.repository.Query("select a from Approval a where a.orgId = :orgId and a.id = :id")
+  Optional<Approval> findScopedForUpdate(@org.springframework.data.repository.query.Param("orgId") UUID orgId, @org.springframework.data.repository.query.Param("id") UUID id);
+
   List<Approval> findByIncidentIdAndStatus(UUID incidentId, Status status);
 }

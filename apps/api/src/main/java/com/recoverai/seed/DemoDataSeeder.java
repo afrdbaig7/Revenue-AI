@@ -78,6 +78,7 @@ public class DemoDataSeeder {
   private final SecretCipher cipher;
   private final AuditService audit;
   private final ObjectMapper mapper;
+  private final com.recoverai.analytics.application.SettlementLedger ledger;
 
   private static final String[] FIRST_NAMES = {
     "Aarav", "Diya", "Rohan", "Ananya", "Vivaan", "Ishita", "Kabir", "Meera", "Arjun", "Saanvi",
@@ -243,6 +244,7 @@ public class DemoDataSeeder {
       inc.setClosedAt(recoveredAt.plus(1, ChronoUnit.HOURS));
       inc.setPolicyResult("PASS");
       lastIncidentId = incidents.save(inc).getId();
+      ledger.capture(org.getId(), inc, payment);
     }
     return lastIncidentId;
   }

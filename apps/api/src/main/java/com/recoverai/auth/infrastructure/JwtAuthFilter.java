@@ -38,6 +38,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
   private final ObjectMapper objectMapper;
 
   @Override
+  protected boolean shouldNotFilter(HttpServletRequest request) {
+    return java.util.Set.of("/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/csrf").contains(request.getServletPath());
+  }
+
+  @Override
   protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
     String token = extractToken(request);

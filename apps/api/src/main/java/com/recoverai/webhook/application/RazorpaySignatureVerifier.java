@@ -32,21 +32,28 @@ public class RazorpaySignatureVerifier {
    * has one; bounded loop). Returns the matching integration or an invalid result.
    */
   public VerificationResult verify(byte[] rawBody, String signatureHeader) {
+    return verify(rawBody, signatureHeader, null);
+  }
+
+  public VerificationResult verify(byte[] rawBody, String signatureHeader, java.util.UUID integrationId) {
     if (signatureHeader == null || signatureHeader.isBlank() || rawBody == null) {
       return VerificationResult.invalid("missing signature header");
     }
-    List<MerchantIntegration> candidates = integrations.findByProviderAndActiveTrue("razorpay");
+    List<MerchantIntegration> candidates = integrationId == null ? integrations.findByProviderAndActiveTrue("razorpay")
+        : integrations.findById(integrationId).filter(i -> i.isActive() && "razorpay".equals(i.getProvider())).stream().toList();
+    MerchantIntegration matched = null;
     for (MerchantIntegration integration : candidates) {
       try {
         String secret = cipher.decrypt(integration.getWebhookSecretEncrypted());
-        if (hmacSha256(rawBody, secret).equals(signatureHeader.trim())) {
-          return VerificationResult.valid(integration);
+        if (java.security.MessageDigest.isEqual(hmacSha256(rawBody, secret).getBytes(StandardCharsets.US_ASCII), signatureHeader.trim().getBytes(StandardCharsets.US_ASCII))) {
+          if (matched != null) return VerificationResult.invalid("ambiguous signature; use the integration-specific webhook URL");
+          matched = integration;
         }
       } catch (Exception e) {
         // corrupted secret for one integration — skip it, don't fail closed on one row
       }
     }
-    return VerificationResult.invalid("signature did not match any active integration");
+    return matched == null ? VerificationResult.invalid("signature did not match an active integration") : VerificationResult.valid(matched);
   }
 
   public static String hmacSha256(byte[] data, String secret) {

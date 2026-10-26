@@ -10,4 +10,6 @@ public interface PolicySetRepository extends JpaRepository<PolicySet, UUID> {
   Optional<PolicySet> findByOrgIdAndActiveTrue(UUID orgId);
 
   Optional<PolicySet> findByOrgIdAndId(UUID orgId, UUID id);
+
+  java.util.List<PolicySet> findByOrgId(UUID orgId);
 }

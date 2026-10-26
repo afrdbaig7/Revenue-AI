@@ -27,11 +27,12 @@ import java.util.UUID;
 public class PolicyController {
 
   private final PolicySetRepository policySets;
+  private final com.recoverai.audit.application.AuditService audit;
 
   @GetMapping
   public List<PolicySet> list(Authentication authentication) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
-    return policySets.findAll().stream().filter(p -> p.getOrgId().equals(orgId)).toList();
+    return policySets.findByOrgId(orgId);
   }
 
   @GetMapping("/{id}")
@@ -43,12 +44,16 @@ public class PolicyController {
   }
 
   @PutMapping("/{id}")
+  @org.springframework.transaction.annotation.Transactional
   @PreAuthorize("hasAnyRole('OWNER','ADMIN')")
   public PolicySet update(Authentication authentication, @PathVariable UUID id, @Valid @RequestBody PolicyUpdate req) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
     PolicySet policy = policySets
         .findByOrgIdAndId(orgId, id)
         .orElseThrow(() -> ApiException.notFound("Policy set not found"));
+    if (req.version() == null || req.version() != policy.getVersion()) throw ApiException.conflict("Policy changed; reload before saving");
+    var before = audit.json(policy);
+    long previousVersion = policy.getVersion();
     policy.setMaxRetries(req.maxRetries());
     policy.setMaxContactAttempts(req.maxContactAttempts());
     policy.setMaxDiscountPercent(req.maxDiscountPercent());
@@ -64,7 +69,9 @@ public class PolicyController {
     policy.setAllowDelayedRetry(req.allowDelayedRetry());
     policy.setName(req.name() == null ? policy.getName() : req.name());
     policy.setUpdatedAt(Instant.now());
-    return policySets.save(policy);
+    PolicySet saved = policySets.saveAndFlush(policy);
+    audit.record("POLICY_UPDATED", "policy_set", id.toString(), String.valueOf(previousVersion), String.valueOf(saved.getVersion()), before, audit.json(saved), null);
+    return saved;
   }
 
   public record PolicyUpdate(
@@ -81,5 +88,6 @@ public class PolicyController {
       boolean allowSms,
       boolean allowDiscounts,
       boolean allowPaymentLinks,
-      boolean allowDelayedRetry) {}
+      boolean allowDelayedRetry,
+      Long version) {}
 }

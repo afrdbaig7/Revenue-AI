@@ -31,23 +31,22 @@ public class SystemController {
   public Map<String, Object> health(Authentication authentication) {
     UUID orgId = ((CurrentUser) authentication.getPrincipal()).orgId();
     Map<String, Object> body = new HashMap<>();
-    body.put("webhookReceived", webhooks.countByProcessingStatus("RECEIVED") + webhooks.countByProcessingStatus("PROCESSED"));
-    body.put("webhookPending", webhooks.countByProcessingStatus("RECEIVED"));
-    body.put("outboxPending", outbox.findPendingDue(java.time.Instant.now(), org.springframework.data.domain.PageRequest.of(0, 1)).size());
-    body.put("deadLetterQueue", outbox.findByStatus("DEAD", org.springframework.data.domain.PageRequest.of(0, 20)).getTotalElements());
-    body.put("deadLetterEvents", outbox.findByStatus("DEAD", org.springframework.data.domain.PageRequest.of(0, 20)).getContent().stream()
+    body.put("webhookReceived", webhooks.countByOrgId(orgId));
+    body.put("webhookPending", webhooks.countByOrgIdAndProcessingStatus(orgId, "RECEIVED"));
+    body.put("outboxPending", outbox.countByOrgIdAndStatus(orgId, "PENDING") + outbox.countByOrgIdAndStatus(orgId, "PROCESSING"));
+    body.put("deadLetterQueue", outbox.findByOrgIdAndStatus(orgId, "DEAD", org.springframework.data.domain.PageRequest.of(0, 20)).getTotalElements());
+    body.put("deadLetterEvents", outbox.findByOrgIdAndStatus(orgId, "DEAD", org.springframework.data.domain.PageRequest.of(0, 20)).getContent().stream()
         .map(e -> java.util.Map.of(
             "id", e.getId().toString(),
             "eventType", e.getEventType(),
-            "error", e.getLastError() == null ? "" : e.getLastError(),
+            "error", "Delivery failed; inspect authorized operational logs",
             "attempts", e.getAttempts(),
             "createdAt", e.getCreatedAt().toString(),
             "lastFailure", e.getNextAttemptAt().toString()))
         .toList());
     body.put("aiService", Map.of(
         "enabled", props.ai().enabled(),
-        "baseUrl", props.ai().baseUrl(),
-        "mode", props.razorpay().mockMode() ? "deterministic-fallback" : "llm"));
+        "mode", props.ai().enabled() ? "advisory-with-fallback" : "disabled"));
     body.put("provider", Map.of(
         "name", "razorpay",
         "mode", props.razorpay().mockMode() ? "MOCK (SIMULATED)" : "TEST MODE",
@@ -55,14 +54,7 @@ public class SystemController {
     body.put("eventDispatchMode", props.eventDispatchMode());
     body.put("temporalEnabled", props.temporal().enabled());
     body.put("demoMode", props.demoMode());
-    body.put("metrics", Map.of(
-        "duplicateCollectionPrevented", counterValue("duplicate_collection_prevented_total"),
-        "recovered", counterValue("recovery_recovered_total"),
-        "policyBlocks", counterValue("recovery_blocked_total"),
-        "aiFallbacks", counterValue("ai_fallback_total"),
-        "webhookInvalidSignatures", counterValue("webhook_invalid_signature_total"),
-        "workflowFailures", counterValue("workflow_failure_total"),
-        "providerErrors", counterValue("provider_error_total")));
+    body.put("metrics", Map.of()); // Process-wide telemetry is available only through protected monitoring.
     return body;
   }
 

@@ -26,14 +26,14 @@ const PROOFS = [
     icon: Zap,
     title: "Transactional Outbox",
     description:
-      "Atomic database mutations + Redpanda (Kafka) event publishing guarantees zero lost payment failure events.",
+      "Atomic database mutations + Redpanda (Kafka) event publishing persists payment events for bounded retries and duplicate-safe processing.",
     tag: "AT-LEAST-ONCE",
   },
   {
     icon: ShieldAlert,
     title: "Human-in-the-Loop Gates",
     description:
-      "High-friction or high-discount actions automatically hold in an operator queue for dual-control authorization.",
+      "High-friction or high-discount actions automatically hold in an operator queue for human review and authorization.",
     tag: "RISK-CONTROLLED",
   },
   {
@@ -61,7 +61,7 @@ export function ProofGrid() {
             Engineered For Fintech Reliability
           </h2>
           <p className="mt-2 text-2xl font-bold tracking-tight text-ink-950 sm:text-3xl">
-            Built on verified engineering principles, not black-box promises.
+            Designed around explicit state, policy, and audit records.
           </p>
           <p className="mt-3 text-sm text-slate-600">
             Every component in RecoverAI is backed by verifiable state machines, transactional outbox guarantees, and deterministic policy boundaries.

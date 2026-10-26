@@ -31,6 +31,10 @@ public class CommunicationService {
   private final CustomerRepository customers;
   private final NotificationProvider notificationProvider;
   private final RateLimiter rateLimiter;
+  private final com.recoverai.incident.infrastructure.RevenueIncidentRepository incidents;
+  private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+  private final com.recoverai.policy.infrastructure.PolicySetRepository policies;
+  private final com.recoverai.policy.application.PolicyEngine policyEngine;
 
   @Transactional
   public Communication sendRecoveryMessage(
@@ -44,23 +48,49 @@ public class CommunicationService {
       int maxContacts,
       Duration cooldown) {
 
+    String operationKey = "comm:" + vars.getOrDefault("_operationKey", incidentId + ":" + template + ":" + contactsSoFar);
+    jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (rs, row) -> 0, orgId + ":customer:" + customerId);
+    var existing = repository.findByOrgIdAndOperationKey(orgId, operationKey);
+    if (existing.isPresent()) return existing.get();
     Customer customer = customers
         .findById(customerId)
+        .filter(c -> c.getOrgId().equals(orgId))
         .orElseThrow(() -> ApiException.notFound("Customer not found"));
 
     Communication message = new Communication();
     message.setOrgId(orgId);
+    message.setOperationKey(operationKey);
     message.setIncidentId(incidentId);
     message.setCustomerId(customerId);
     message.setChannel(channel);
     message.setTemplate(template);
     message.setSubject(renderSubject(template, vars));
     message.setBodyRedacted(renderBody(template, vars));
+    if (incidentId != null) {
+      var current = incidents.findByIdForUpdate(incidentId).filter(i -> i.getOrgId().equals(orgId))
+          .orElseThrow(() -> ApiException.notFound("Incident not found"));
+      var policy = policies.findByOrgIdAndActiveTrue(orgId).orElseThrow(() -> ApiException.conflict("Active policy missing"));
+      String strategy = vars.getOrDefault("_strategy", switch (channel) { case SMS -> "SMS_NUDGE"; case WHATSAPP -> "WHATSAPP_NUDGE"; default -> "EMAIL_NUDGE"; });
+      boolean expired = current.getRecoveryWindowEndsAt() != null && !current.getRecoveryWindowEndsAt().isAfter(Instant.now());
+      if (current.getStatus().isTerminal() || expired || !policyEngine.evaluate(policy, null, strategy,
+          0, current.getContactCount(), Instant.now(), current.getAmountMinor()).allowed()) {
+        message.setStatus(Status.BLOCKED);
+        return repository.save(message);
+      }
+      contactsSoFar = current.getContactCount();
+      maxContacts = policy.getMaxContactAttempts();
+      cooldown = Duration.ofHours(policy.getContactCooldownHours());
+    }
 
     // --- Hard rules: opt-out overrides everything (including AI recommendations) ---
     if (customer.optedOut()) {
       message.setStatus(Status.OPTED_OUT);
       log.info("COMMUNICATION_BLOCKED reason=OPTED_OUT customer={} incident={}", customerId, incidentId);
+      return repository.save(message);
+    }
+    if (channel != Channel.DEMO_INBOX && customer.getPreferredChannel() != null
+        && !customer.getPreferredChannel().equals(channel.name())) {
+      message.setStatus(Status.BLOCKED);
       return repository.save(message);
     }
     if (contactsSoFar >= maxContacts) {
@@ -81,7 +111,7 @@ public class CommunicationService {
     }
 
     NotificationProvider.SendResult result =
-        notificationProvider.send(message, "comm-" + UUID.randomUUID());
+        notificationProvider.send(message, operationKey);
     if (result.delivered()) {
       message.setStatus(notificationProvider.isReal() ? Status.SENT : Status.SIMULATED);
       message.setSimulated(!notificationProvider.isReal());
@@ -89,6 +119,12 @@ public class CommunicationService {
       message.setProviderMessageId(result.providerMessageId());
       customer.recordContact();
       customers.save(customer);
+      if (incidentId != null) {
+        var incident = incidents.findByIdForUpdate(incidentId).filter(i -> i.getOrgId().equals(orgId))
+            .orElseThrow(() -> ApiException.notFound("Incident not found"));
+        incident.setContactCount(incident.getContactCount() + 1);
+        incidents.save(incident);
+      }
     } else {
       message.setStatus(Status.FAILED);
     }
